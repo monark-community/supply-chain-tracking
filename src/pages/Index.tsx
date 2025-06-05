@@ -50,7 +50,7 @@ const Index = () => {
             <div
               key={index}
               className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
-                index === currentImageIndex ? 'opacity-30' : 'opacity-0'
+                index === currentImageIndex ? 'opacity-60' : 'opacity-0'
               }`}
               style={{
                 backgroundImage: `url(${image})`,
@@ -61,7 +61,7 @@ const Index = () => {
             />
           ))}
           {/* Overlay */}
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-50/90 via-white/95 to-purple-50/90" />
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-50/70 via-white/80 to-purple-50/70" />
         </div>
 
         {/* Content */}
