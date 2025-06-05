@@ -49,19 +49,24 @@ const Index = () => {
           {images.map((image, index) => (
             <div
               key={index}
-              className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
-                index === currentImageIndex ? 'opacity-60' : 'opacity-0'
+              className={`absolute inset-0 transition-all duration-1000 ease-in-out ${
+                index === currentImageIndex ? 'opacity-80' : 'opacity-0'
               }`}
               style={{
                 backgroundImage: `url(${image})`,
                 backgroundSize: 'cover',
-                backgroundPosition: `${50 + (index * 10)}% center`,
+                backgroundPosition: index === currentImageIndex 
+                  ? index % 2 === 0 
+                    ? '40% center' // Even index: move to left
+                    : '60% center' // Odd index: move to right
+                  : '50% center',
                 backgroundRepeat: 'no-repeat',
+                transform: index === currentImageIndex ? 'scale(1.05)' : 'scale(1)',
               }}
             />
           ))}
           {/* Overlay */}
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-50/70 via-white/80 to-purple-50/70" />
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-50/60 via-white/70 to-purple-50/60" />
         </div>
 
         {/* Content */}
