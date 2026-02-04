@@ -75,7 +75,7 @@ if contract_address and os.path.exists(abi_file_path):
                 if st.button("Update Status"):
                     try:
                         status_code = status_options[new_status]
-                        tx = contract.functions.updateState(update_id, status_code).transact({'from': my_address})
+                        tx = contract.functions.updateBatchState(update_id, status_code).transact({'from': my_address})
                         st.success(f"Status Updated! Tx: {tx.hex()}")
                     except Exception as e:
                         st.error(f"Error: {e}")

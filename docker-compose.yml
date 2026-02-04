@@ -9,7 +9,8 @@ services:
     volumes:
       - ./smart-contracts:/app
     # this is to keep alive forever, do not run anything yet
-    command: tail -f /dev/null
+    command: sh -c "npm install && npx hardhat node --hostname 0.0.0.0 --port 8545"
+
     ports:
       - "8545:8545"
 

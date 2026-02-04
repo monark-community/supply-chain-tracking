@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "/app/contracts/ChainProof.sol": {
-      "lastModificationDate": 1769481656635,
-      "contentHash": "d640c461ddc5ba18662eae0fb56e1673",
+      "lastModificationDate": 1770149841336,
+      "contentHash": "1894f73237dc028f7af339e0e6b0c1d0",
       "sourceName": "contracts/ChainProof.sol",
       "solcConfig": {
         "version": "0.8.24",
