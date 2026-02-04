@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # 1 Blockchain in debug mode
+  chain:
+    image: node:20-alpine
+    platform: linux/arm64/v8
+    working_dir: /app
+    volumes:
+      - ./smart-contracts:/app
+    # this is to keep alive forever, do not run anything yet
+    command: tail -f /dev/null
+    ports:
+      - "8545:8545"
+
+  # the dashboard
+  dashboard:
+    image: python:3.9-slim
+    platform: linux/arm64/v8
+    working_dir: /app
+    volumes:
+      - ./dashboard:/app
+    command: sh -c "pip install web3 streamlit && streamlit run app.py"
+    ports:
+      - "8501:8501"
+    depends_on:
+      - chain
