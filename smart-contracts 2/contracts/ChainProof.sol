@@ -43,9 +43,10 @@ contract ChainProof {
     
     function updateBatchState(uint256 _id, State _newState) public {
         Batch storage batch = batches[_id]; // Get the batch from storage by ID
+        require(msg.sender == batch.currentHandler, "Only current handler can update state"); // Only the person who currently has the product can update its status
+
 
         require(batch.id != 0, "Batch does not exist"); // Make sure the batch was created
-
         require(
             uint256(_newState) > uint256(batch.state),
             "Invalid state transition"
