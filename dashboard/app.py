@@ -2,6 +2,7 @@ import streamlit as st
 from web3 import Web3
 import json
 import os
+from datetime import datetime
 
 # 1. SETUP BLOCKCHAIN CONNECTION
 if "w3" not in st.session_state:
@@ -18,12 +19,27 @@ st.sidebar.header("🔌 Connection")
 contract_address = st.sidebar.text_input("Contract Address", placeholder="Paste 0x... here")
 abi_file_path = "ChainProof.json"
 
+
 # Helper: basic address validation
 def is_address(addr: str) -> bool:
     try:
         return bool(addr) and w3.is_address(addr)
     except Exception:
         return False
+
+
+def short_addr(a: str) -> str:
+    if not a:
+        return ""
+    return f"{a[:6]}...{a[-4:]}"
+
+
+def fmt_time(ts: int) -> str:
+    return datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+STATE_LABELS = ["Harvested", "Processed", "Packed", "Shipped", "Received", "Sold"]
+
 
 if contract_address and os.path.exists(abi_file_path):
     try:
@@ -49,7 +65,24 @@ if contract_address and os.path.exists(abi_file_path):
         st.sidebar.divider()
         st.sidebar.subheader("👤 Who are you?")
         my_address = st.sidebar.selectbox("Select Actor", accounts)
-        st.sidebar.info(f"Acting as: {my_address[:6]}...{my_address[-4:]}")
+        st.sidebar.info(f"Acting as: {short_addr(my_address)}")
+
+        # ---------------- Role Labels UI ----------------
+        st.sidebar.divider()
+        st.sidebar.subheader("🏷 Role Labels (UI)")
+
+        role_addresses = {
+            "Producer": st.sidebar.selectbox("Producer", accounts, index=0, key="role_producer"),
+            "Transporter": st.sidebar.selectbox("Transporter", accounts, index=1, key="role_transporter"),
+            "Warehouse": st.sidebar.selectbox("Warehouse", accounts, index=2, key="role_warehouse"),
+            "Retailer": st.sidebar.selectbox("Retailer", accounts, index=3, key="role_retailer"),
+        }
+
+        def role_for(addr: str) -> str:
+            for role, a in role_addresses.items():
+                if a and addr and a.lower() == addr.lower():
+                    return role
+            return "Unknown"
 
         col1, col2 = st.columns(2)
 
@@ -128,14 +161,12 @@ if contract_address and os.path.exists(abi_file_path):
                     if batch[0] == 0:
                         st.warning("Batch not found.")
                     else:
-                        states = ["Harvested", "Processed", "Packed", "Shipped", "Received", "Sold"]
-
                         st.markdown(
                             f"""
                             ### Batch #{batch[0]}
                             - **📍 Origin:** {batch[2]}
-                            - **👤 Current Handler:** `{batch[6]}`
-                            - **📦 Status:** **{states[batch[4]]}**
+                            - **👤 Current Handler:** **{role_for(batch[6])}** (`{short_addr(batch[6])}`)
+                            - **📦 Status:** **{STATE_LABELS[batch[4]]}**
                             - **📅 Timestamp:** {batch[5]}
                             """
                         )
@@ -145,7 +176,6 @@ if contract_address and os.path.exists(abi_file_path):
                         st.divider()
                         st.subheader("🕒 Batch History (Timeline)")
 
-                        
                         created_logs = contract.events.BatchCreated().get_logs(
                             from_block=0,
                             argument_filters={"id": track_id}
@@ -159,7 +189,6 @@ if contract_address and os.path.exists(abi_file_path):
                             argument_filters={"id": track_id}
                         )
 
-                        
                         timeline = []
 
                         for e in created_logs:
@@ -191,24 +220,11 @@ if contract_address and os.path.exists(abi_file_path):
                                 "block": e["blockNumber"],
                             })
 
-                        
                         timeline.sort(key=lambda x: (x.get("timestamp", 0), x.get("block", 0)))
 
                         if not timeline:
                             st.info("No history found for this batch yet.")
                         else:
-                            from datetime import datetime
-
-                            STATE_LABELS = ["Harvested", "Processed", "Packed", "Shipped", "Received", "Sold"]
-
-                            def short_addr(a: str) -> str:
-                                if not a:
-                                    return ""
-                                return f"{a[:6]}...{a[-4:]}"
-
-                            def fmt_time(ts: int) -> str:
-                                return datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S UTC")
-
                             for i, e in enumerate(timeline, start=1):
                                 t = fmt_time(e["timestamp"])
                                 tx = e.get("tx", "")
@@ -217,7 +233,7 @@ if contract_address and os.path.exists(abi_file_path):
                                 if e["type"] == "CREATED":
                                     st.markdown(
                                         f"**{i}. 🌱 Created**  \n"
-                                        f"- **By:** `{short_addr(e['actor'])}`  \n"
+                                        f"- **By:** **{role_for(e['actor'])}** (`{short_addr(e['actor'])}`)  \n"
                                         f"- **When:** {t}  \n"
                                         f"- **Tx:** `{tx_short}`"
                                     )
@@ -228,7 +244,7 @@ if contract_address and os.path.exists(abi_file_path):
                                     st.markdown(
                                         f"**{i}. 🚚 Status Updated**  \n"
                                         f"- **New status:** **{state_name}**  \n"
-                                        f"- **By:** `{short_addr(e['actor'])}`  \n"
+                                        f"- **By:** **{role_for(e['actor'])}** (`{short_addr(e['actor'])}`)  \n"
                                         f"- **When:** {t}  \n"
                                         f"- **Tx:** `{tx_short}`"
                                     )
@@ -236,18 +252,15 @@ if contract_address and os.path.exists(abi_file_path):
                                 elif e["type"] == "TRANSFERRED":
                                     st.markdown(
                                         f"**{i}. 🔁 Transferred**  \n"
-                                        f"- **From:** `{short_addr(e['from'])}`  \n"
-                                        f"- **To:** `{short_addr(e['to'])}`  \n"
+                                        f"- **From:** **{role_for(e['from'])}** (`{short_addr(e['from'])}`)  \n"
+                                        f"- **To:** **{role_for(e['to'])}** (`{short_addr(e['to'])}`)  \n"
                                         f"- **When:** {t}  \n"
                                         f"- **Tx:** `{tx_short}`"
                                     )
 
                                 st.divider()
 
-
-
                 except Exception as e:
-                    # IMPORTANT: show the real error for debugging
                     st.error(f"Error reading chain: {e}")
 
     except Exception as e:
