@@ -142,6 +142,109 @@ if contract_address and os.path.exists(abi_file_path):
 
                         progress = (batch[4] + 1) / 6
                         st.progress(progress)
+                        st.divider()
+                        st.subheader("🕒 Batch History (Timeline)")
+
+                        
+                        created_logs = contract.events.BatchCreated().get_logs(
+                            from_block=0,
+                            argument_filters={"id": track_id}
+                        )
+                        state_logs = contract.events.StateUpdated().get_logs(
+                            from_block=0,
+                            argument_filters={"id": track_id}
+                        )
+                        transfer_logs = contract.events.BatchTransferred().get_logs(
+                            from_block=0,
+                            argument_filters={"id": track_id}
+                        )
+
+                        
+                        timeline = []
+
+                        for e in created_logs:
+                            timeline.append({
+                                "type": "CREATED",
+                                "actor": e["args"]["creator"],
+                                "timestamp": int(e["args"]["timestamp"]),
+                                "tx": e["transactionHash"].hex(),
+                                "block": e["blockNumber"],
+                            })
+
+                        for e in state_logs:
+                            timeline.append({
+                                "type": "STATE_UPDATED",
+                                "actor": e["args"]["handler"],
+                                "state": int(e["args"]["newState"]),
+                                "timestamp": int(e["args"]["timestamp"]),
+                                "tx": e["transactionHash"].hex(),
+                                "block": e["blockNumber"],
+                            })
+
+                        for e in transfer_logs:
+                            timeline.append({
+                                "type": "TRANSFERRED",
+                                "from": e["args"]["from"],
+                                "to": e["args"]["to"],
+                                "timestamp": int(e["args"]["timestamp"]),
+                                "tx": e["transactionHash"].hex(),
+                                "block": e["blockNumber"],
+                            })
+
+                        
+                        timeline.sort(key=lambda x: (x.get("timestamp", 0), x.get("block", 0)))
+
+                        if not timeline:
+                            st.info("No history found for this batch yet.")
+                        else:
+                            from datetime import datetime
+
+                            STATE_LABELS = ["Harvested", "Processed", "Packed", "Shipped", "Received", "Sold"]
+
+                            def short_addr(a: str) -> str:
+                                if not a:
+                                    return ""
+                                return f"{a[:6]}...{a[-4:]}"
+
+                            def fmt_time(ts: int) -> str:
+                                return datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                            for i, e in enumerate(timeline, start=1):
+                                t = fmt_time(e["timestamp"])
+                                tx = e.get("tx", "")
+                                tx_short = f"{tx[:10]}...{tx[-8:]}" if tx else ""
+
+                                if e["type"] == "CREATED":
+                                    st.markdown(
+                                        f"**{i}. 🌱 Created**  \n"
+                                        f"- **By:** `{short_addr(e['actor'])}`  \n"
+                                        f"- **When:** {t}  \n"
+                                        f"- **Tx:** `{tx_short}`"
+                                    )
+
+                                elif e["type"] == "STATE_UPDATED":
+                                    s = e.get("state", -1)
+                                    state_name = STATE_LABELS[s] if isinstance(s, int) and 0 <= s < len(STATE_LABELS) else str(s)
+                                    st.markdown(
+                                        f"**{i}. 🚚 Status Updated**  \n"
+                                        f"- **New status:** **{state_name}**  \n"
+                                        f"- **By:** `{short_addr(e['actor'])}`  \n"
+                                        f"- **When:** {t}  \n"
+                                        f"- **Tx:** `{tx_short}`"
+                                    )
+
+                                elif e["type"] == "TRANSFERRED":
+                                    st.markdown(
+                                        f"**{i}. 🔁 Transferred**  \n"
+                                        f"- **From:** `{short_addr(e['from'])}`  \n"
+                                        f"- **To:** `{short_addr(e['to'])}`  \n"
+                                        f"- **When:** {t}  \n"
+                                        f"- **Tx:** `{tx_short}`"
+                                    )
+
+                                st.divider()
+
+
 
                 except Exception as e:
                     # IMPORTANT: show the real error for debugging
