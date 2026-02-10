@@ -22,6 +22,8 @@ contract ChainProof {
  
     event StateUpdated(uint256 indexed id, State newState, address indexed handler, uint256 timestamp); // Logs every state transition for a batch (who, what, and when).
 
+    event BatchTransferred(uint256 indexed id, address indexed from, address indexed to, uint256 timestamp); // Logs every batch transfer (from who, to who, and when).
+
 
 
     function harvestBatch(string memory _origin, string memory _ipfsHash) public {
@@ -55,5 +57,22 @@ contract ChainProof {
 
         emit StateUpdated(_id, _newState, msg.sender, block.timestamp); // Logs the state change on-chain
     }
+
+    function transferBatch(uint256 _id, address _to) public {
+        Batch storage batch = batches[_id]; // Get the batch from storage by ID
+
+        require(batch.id != 0, "Batch does not exist"); // Make sure the batch was created
+        require(msg.sender == batch.currentHandler, "Only current handler can transfer"); // Only the current handler can transfer the batch
+        require(_to != address(0), "Invalid recipient"); // Prevents sending to a zero address
+        require(_to != batch.currentHandler, "Already current handler"); // Prevents transferring to yourself
+
+        address from = batch.currentHandler; // Stores the current handler before updating
+
+        batch.currentHandler = _to; // Transfers responsibility to the new handler
+        batch.timestamp = block.timestamp; // Records when the transfer happened
+
+        emit BatchTransferred(_id, from, _to, block.timestamp); // Logs the transfer on-chain
+    }
+
 
 }

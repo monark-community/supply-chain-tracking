@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # 1 Blockchain in debug mode
@@ -7,7 +7,8 @@ services:
     platform: linux/arm64/v8
     working_dir: /app
     volumes:
-      - ./smart-contracts:/app
+      - ./smart-contracts 2:/app
+
     # this is to keep alive forever, do not run anything yet
     command: sh -c "npm install && npx hardhat node --hostname 0.0.0.0 --port 8545"
 
