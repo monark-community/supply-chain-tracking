@@ -2,10 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Package, Users, MapPin, FileText, LayoutDashboard, QrCode, Wallet } from 'lucide-react';
+import { Package, MapPin, FileText, LayoutDashboard, QrCode, Wallet } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
-
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Products', href: '/products', icon: Package },

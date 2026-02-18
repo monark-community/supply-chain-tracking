@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { FileText, Search, Clock, User, Package, Users, MapPin } from 'lucide-react';
+import { FileText, Search, Clock, User, Package, MapPin } from 'lucide-react';
 
 export default function AuditPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -44,7 +44,7 @@ export default function AuditPage() {
       entityType: 'trace',
       entityName: 'Shipped from Mumbai',
       timestamp: '2025-10-16 16:20',
-      details: 'Trace event recorded: shipped by Global Logistics Inc.',
+      details: 'Transfer recorded: Green Valley Farms -> Central Processor',
     },
     {
       id: '4',
@@ -78,7 +78,6 @@ export default function AuditPage() {
   const getActionColor = (entityType: string) => {
     const colors: Record<string, string> = {
       product: 'bg-blue-100 text-blue-800',
-      actor: 'bg-green-100 text-green-800',
       batch: 'bg-purple-100 text-purple-800',
       trace: 'bg-orange-100 text-orange-800',
     };
@@ -89,8 +88,6 @@ export default function AuditPage() {
     switch (entityType) {
       case 'product':
         return Package;
-      case 'actor':
-        return Users;
       case 'batch':
         return MapPin;
       case 'trace':

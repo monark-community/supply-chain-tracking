@@ -29,7 +29,7 @@ export default function BatchesPage() {
       currentQuantity: 5000,
       status: 'in_transit',
       currentLocation: 'Port of Rotterdam',
-      currentActor: 'Global Logistics Inc.',
+      currentCustodian: 'Global Logistics Inc.',
       lastUpdate: '2 hours ago',
       traces: 5,
     },
@@ -41,7 +41,7 @@ export default function BatchesPage() {
       currentQuantity: 3000,
       status: 'processing',
       currentLocation: 'Berlin, Germany',
-      currentActor: 'Chocolate Factory Ltd.',
+      currentCustodian: 'Chocolate Factory Ltd.',
       lastUpdate: '5 hours ago',
       traces: 8,
     },
@@ -53,7 +53,7 @@ export default function BatchesPage() {
       currentQuantity: 2500,
       status: 'delivered',
       currentLocation: 'London, UK',
-      currentActor: 'Organic Market Chain',
+      currentCustodian: 'Organic Market Chain',
       lastUpdate: '8 hours ago',
       traces: 12,
     },
@@ -65,7 +65,7 @@ export default function BatchesPage() {
       currentQuantity: 10000,
       status: 'created',
       currentLocation: 'Mumbai, India',
-      currentActor: 'Green Farm Co-op',
+      currentCustodian: 'Green Farm Co-op',
       lastUpdate: '1 day ago',
       traces: 2,
     },
@@ -129,8 +129,8 @@ export default function BatchesPage() {
                   <Input id="location" placeholder="e.g., Mumbai, India" />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="actor">Current Actor</Label>
-                  <Input id="actor" placeholder="Select actor" />
+                  <Label htmlFor="custodian">Current Custodian</Label>
+                  <Input id="custodian" placeholder="Enter organization name" />
                 </div>
               </div>
               <DialogFooter>
@@ -202,8 +202,8 @@ export default function BatchesPage() {
                           <MapPin className="h-5 w-5 text-purple-600" />
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Current Actor</p>
-                          <p className="font-medium text-gray-900">{batch.currentActor}</p>
+                          <p className="text-xs text-gray-500">Current Custodian</p>
+                          <p className="font-medium text-gray-900">{batch.currentCustodian}</p>
                         </div>
                       </div>
 

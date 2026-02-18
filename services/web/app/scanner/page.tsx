@@ -9,9 +9,32 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { QrCode, Scan, MapPin, Clock, Package, CheckCircle } from 'lucide-react';
 
+type JourneyEvent = {
+  id: string;
+  action: string;
+  from: string;
+  to: string;
+  location: string;
+  timestamp: string;
+  verified: boolean;
+};
+
+type ScannedData = {
+  batchNumber: string;
+  product: {
+    name: string;
+    sku: string;
+    category: string;
+  };
+  status: string;
+  quantity: number;
+  currentLocation: string;
+  journey: JourneyEvent[];
+};
+
 export default function ScannerPage() {
   const [batchNumber, setBatchNumber] = useState('');
-  const [scannedData, setScannedData] = useState<any>(null);
+  const [scannedData, setScannedData] = useState<ScannedData | null>(null);
 
   const handleScan = () => {
     setScannedData({
@@ -28,7 +51,8 @@ export default function ScannerPage() {
         {
           id: '1',
           action: 'produced',
-          actor: 'Green Farm Co-op',
+          from: 'Green Farm Co-op',
+          to: 'Quality Control Corp.',
           location: 'Mumbai, India',
           timestamp: '2025-10-15 08:00',
           verified: true,
@@ -36,7 +60,8 @@ export default function ScannerPage() {
         {
           id: '2',
           action: 'inspected',
-          actor: 'Quality Control Corp.',
+          from: 'Quality Control Corp.',
+          to: 'Global Logistics Inc.',
           location: 'Mumbai, India',
           timestamp: '2025-10-15 14:30',
           verified: true,
@@ -44,7 +69,8 @@ export default function ScannerPage() {
         {
           id: '3',
           action: 'shipped',
-          actor: 'Global Logistics Inc.',
+          from: 'Global Logistics Inc.',
+          to: 'Central Processor',
           location: 'Mumbai Port',
           timestamp: '2025-10-16 06:00',
           verified: true,
@@ -52,7 +78,8 @@ export default function ScannerPage() {
         {
           id: '4',
           action: 'in_transit',
-          actor: 'Global Logistics Inc.',
+          from: 'Global Logistics Inc.',
+          to: 'Central Processor',
           location: 'Port of Rotterdam',
           timestamp: '2025-10-17 10:00',
           verified: true,
@@ -171,7 +198,7 @@ export default function ScannerPage() {
                   <CardContent>
                     <div className="relative space-y-6">
                       <div className="absolute left-6 top-8 bottom-8 w-0.5 bg-gray-200"></div>
-                      {scannedData.journey.map((event: any, index: number) => (
+                      {scannedData.journey.map((event) => (
                         <div key={event.id} className="relative flex gap-4">
                           <div className="flex h-12 w-12 items-center justify-center rounded-full border-4 border-white bg-blue-600">
                             {event.verified ? (
@@ -190,7 +217,7 @@ export default function ScannerPage() {
                               )}
                             </div>
                             <div>
-                              <p className="font-medium text-gray-900">{event.actor}</p>
+                              <p className="font-medium text-gray-900">{event.from} -&gt; {event.to}</p>
                               <div className="mt-1 flex items-center space-x-4 text-sm text-gray-600">
                                 <span className="flex items-center">
                                   <MapPin className="mr-1 h-3 w-3" />

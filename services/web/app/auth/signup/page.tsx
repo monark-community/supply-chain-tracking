@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/select';
 import { Package, Eye, EyeOff, CheckCircle } from 'lucide-react';
 
+const ROLE_STORAGE_KEY = 'chainproof-role';
+
 export default function SignupPage() {
   const router = useRouter();
   const [formData, setFormData] = useState({
@@ -54,8 +56,8 @@ export default function SignupPage() {
         return;
       }
 
-      if (formData.password.length < 8) {
-        setError('Password must be at least 8 characters long');
+      if (formData.password.length < 6) {
+        setError('Password must be at least 6 characters long');
         return;
       }
 
@@ -64,11 +66,12 @@ export default function SignupPage() {
         return;
       }
 
+      window.localStorage.setItem(ROLE_STORAGE_KEY, formData.role);
       await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      router.push('/');
+      router.push('/products');
     } catch (err) {
-      setError('Sign up failed. Please try again.');
+      const message = err instanceof Error ? err.message : 'Sign up failed. Please try again.';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -120,18 +123,17 @@ export default function SignupPage() {
               {/* Role Selection */}
               <div className="space-y-2">
                 <Label htmlFor="role" className="text-sm font-medium">
-                  Role / Actor Type
+                  Role
                 </Label>
                 <Select value={formData.role} onValueChange={(value) => setFormData({ ...formData, role: value })}>
                   <SelectTrigger className="bg-white">
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="producer">Producer</SelectItem>
-                    <SelectItem value="transporter">Transporter</SelectItem>
-                    <SelectItem value="processor">Processor</SelectItem>
-                    <SelectItem value="retailer">Retailer</SelectItem>
-                    <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="producer">Producer - Create products and batches</SelectItem>
+                    <SelectItem value="transporter">Transporter - Move shipments</SelectItem>
+                    <SelectItem value="processor">Processor - Process and handle goods</SelectItem>
+                    <SelectItem value="customer">Customer - Verify product authenticity</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -260,7 +262,7 @@ export default function SignupPage() {
             </div>
             <div className="flex items-center space-x-2">
               <CheckCircle className="h-4 w-4 text-green-600" />
-              <span>Secure multi-stakeholder network</span>
+              <span>Secure multi-organization network</span>
             </div>
           </div>
         </div>

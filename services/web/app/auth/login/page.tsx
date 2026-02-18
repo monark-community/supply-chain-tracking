@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Package, Eye, EyeOff, Wallet, Mail } from 'lucide-react';
 
+const ROLE_STORAGE_KEY = 'chainproof-role';
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -29,11 +31,15 @@ export default function LoginPage() {
         return;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (!window.localStorage.getItem(ROLE_STORAGE_KEY)) {
+        window.localStorage.setItem(ROLE_STORAGE_KEY, 'producer');
+      }
 
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       router.push('/');
     } catch (err) {
-      setError('Login failed. Please try again.');
+      const message = err instanceof Error ? err.message : 'Login failed. Please try again.';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -202,6 +208,22 @@ export default function LoginPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Footer Info */}
+        <div className="mt-8 grid grid-cols-3 gap-4 text-center text-sm">
+          <div>
+            <div className="text-2xl font-bold text-gray-900">100%</div>
+            <div className="text-xs text-gray-600">Secure</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-gray-900">24/7</div>
+            <div className="text-xs text-gray-600">Support</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-gray-900">∞</div>
+            <div className="text-xs text-gray-600">Traceable</div>
+          </div>
+        </div>
 
         {/* Terms */}
         <p className="mt-6 text-center text-xs text-gray-500">
