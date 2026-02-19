@@ -7,98 +7,81 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { QrCode, Scan, MapPin, Clock, Package, CheckCircle } from 'lucide-react';
+import { QrCode, Scan, Clock, Package, CheckCircle } from 'lucide-react';
+import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
 
 type JourneyEvent = {
-  id: string;
-  action: string;
-  from: string;
-  to: string;
-  location: string;
-  timestamp: string;
-  verified: boolean;
+  type: string;
+  text: string;
+  timestamp: number;
+  txHash: string;
 };
 
 type ScannedData = {
-  batchNumber: string;
-  product: {
-    name: string;
-    sku: string;
-    category: string;
-  };
+  chainId: number;
+  contractAddress: string;
+  batchNumber: string | number;
+  productName: string;
   status: string;
   quantity: number;
-  currentLocation: string;
+  currentHandler: string;
+  createdAt: number;
+  updatedAt: number;
+  parents: number[];
+  children: number[];
   journey: JourneyEvent[];
 };
 
 export default function ScannerPage() {
   const [batchNumber, setBatchNumber] = useState('');
   const [scannedData, setScannedData] = useState<ScannedData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleScan = () => {
-    setScannedData({
-      batchNumber: 'BATCH-1K5A2-XYZ12',
-      product: {
-        name: 'Organic Coffee Beans',
-        sku: 'COFFEE-ORG-001',
-        category: 'Food & Beverage',
-      },
-      status: 'in_transit',
-      quantity: 5000,
-      currentLocation: 'Port of Rotterdam',
-      journey: [
-        {
-          id: '1',
-          action: 'produced',
-          from: 'Green Farm Co-op',
-          to: 'Quality Control Corp.',
-          location: 'Mumbai, India',
-          timestamp: '2025-10-15 08:00',
-          verified: true,
-        },
-        {
-          id: '2',
-          action: 'inspected',
-          from: 'Quality Control Corp.',
-          to: 'Global Logistics Inc.',
-          location: 'Mumbai, India',
-          timestamp: '2025-10-15 14:30',
-          verified: true,
-        },
-        {
-          id: '3',
-          action: 'shipped',
-          from: 'Global Logistics Inc.',
-          to: 'Central Processor',
-          location: 'Mumbai Port',
-          timestamp: '2025-10-16 06:00',
-          verified: true,
-        },
-        {
-          id: '4',
-          action: 'in_transit',
-          from: 'Global Logistics Inc.',
-          to: 'Central Processor',
-          location: 'Port of Rotterdam',
-          timestamp: '2025-10-17 10:00',
-          verified: true,
-        },
-      ],
-    });
+  const handleScan = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const result = await readBatchByTrackingOrId(batchNumber);
+      const statusLabel = result.batch.status === 0 ? 'active' : 'consumed';
+      setScannedData({
+        chainId: result.chainId,
+        contractAddress: result.contractAddress,
+        batchNumber: result.batch.trackingCode || result.batch.id,
+        productName: result.batch.origin,
+        status: statusLabel,
+        quantity: result.batch.quantity,
+        currentHandler: result.batch.currentHandler,
+        createdAt: result.batch.createdAt,
+        updatedAt: result.batch.updatedAt,
+        parents: result.parents,
+        children: result.children,
+        journey: result.timeline,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Batch lookup failed';
+      setError(message);
+      setScannedData(null);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getActionColor = (action: string) => {
     const colors: Record<string, string> = {
-      produced: 'bg-green-100 text-green-800',
-      shipped: 'bg-blue-100 text-blue-800',
-      received: 'bg-orange-100 text-orange-800',
-      inspected: 'bg-purple-100 text-purple-800',
-      processed: 'bg-yellow-100 text-yellow-800',
-      delivered: 'bg-emerald-100 text-emerald-800',
-      in_transit: 'bg-blue-100 text-blue-800',
+      HARVEST: 'bg-green-100 text-green-800',
+      SPLIT: 'bg-purple-100 text-purple-800',
+      MERGE: 'bg-indigo-100 text-indigo-800',
+      TRANSFORM: 'bg-yellow-100 text-yellow-800',
+      TRANSFER: 'bg-blue-100 text-blue-800',
+      RECEIVE: 'bg-orange-100 text-orange-800',
     };
     return colors[action] || 'bg-gray-100 text-gray-800';
+  };
+
+  const formatTimestamp = (timestamp: number) => {
+    if (!timestamp) return 'N/A';
+    return new Date(timestamp * 1000).toLocaleString();
   };
 
   return (
@@ -138,16 +121,17 @@ export default function ScannerPage() {
                 <Label htmlFor="batch">Batch Number</Label>
                 <Input
                   id="batch"
-                  placeholder="e.g., BATCH-1K5A2-XYZ12"
+                  placeholder="Enter tracking code or numeric batch id"
                   value={batchNumber}
                   onChange={(e) => setBatchNumber(e.target.value)}
                 />
               </div>
 
-              <Button className="w-full" onClick={handleScan}>
+              <Button className="w-full" onClick={handleScan} disabled={loading || !batchNumber.trim()}>
                 <Scan className="mr-2 h-4 w-4" />
-                Look Up Batch
+                {loading ? 'Looking up...' : 'Look Up Batch'}
               </Button>
+              {error && <p className="text-sm text-red-600">{error}</p>}
             </CardContent>
           </Card>
 
@@ -169,22 +153,42 @@ export default function ScannerPage() {
                   <CardContent>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
-                        <p className="text-sm text-gray-500">Product Name</p>
-                        <p className="mt-1 font-medium text-gray-900">{scannedData.product.name}</p>
+                        <p className="text-sm text-gray-500">Origin / Product Label</p>
+                        <p className="mt-1 font-medium text-gray-900">{scannedData.productName}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-500">SKU</p>
-                        <p className="mt-1 font-medium text-gray-900">{scannedData.product.sku}</p>
+                        <p className="text-sm text-gray-500">Current Handler</p>
+                        <p className="mt-1 font-medium text-gray-900">{scannedData.currentHandler}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-500">Category</p>
-                        <p className="mt-1 font-medium text-gray-900">{scannedData.product.category}</p>
+                        <p className="text-sm text-gray-500">Parents</p>
+                        <p className="mt-1 font-medium text-gray-900">
+                          {scannedData.parents.length ? scannedData.parents.join(', ') : 'None'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Children</p>
+                        <p className="mt-1 font-medium text-gray-900">
+                          {scannedData.children.length ? scannedData.children.join(', ') : 'None'}
+                        </p>
                       </div>
                       <div>
                         <p className="text-sm text-gray-500">Quantity</p>
+                        <p className="mt-1 font-medium text-gray-900">{scannedData.quantity.toLocaleString()} units</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Network / Contract</p>
                         <p className="mt-1 font-medium text-gray-900">
-                          {scannedData.quantity.toLocaleString()} units
+                          Chain {scannedData.chainId} • {scannedData.contractAddress}
                         </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Created</p>
+                        <p className="mt-1 font-medium text-gray-900">{formatTimestamp(scannedData.createdAt)}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Updated</p>
+                        <p className="mt-1 font-medium text-gray-900">{formatTimestamp(scannedData.updatedAt)}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -198,40 +202,39 @@ export default function ScannerPage() {
                   <CardContent>
                     <div className="relative space-y-6">
                       <div className="absolute left-6 top-8 bottom-8 w-0.5 bg-gray-200"></div>
-                      {scannedData.journey.map((event) => (
-                        <div key={event.id} className="relative flex gap-4">
+                      {scannedData.journey.map((event, index) => (
+                        <div key={`${event.txHash}-${index}`} className="relative flex gap-4">
                           <div className="flex h-12 w-12 items-center justify-center rounded-full border-4 border-white bg-blue-600">
-                            {event.verified ? (
-                              <CheckCircle className="h-6 w-6 text-white" />
-                            ) : (
-                              <Clock className="h-6 w-6 text-white" />
-                            )}
+                            <CheckCircle className="h-6 w-6 text-white" />
                           </div>
                           <div className="flex-1 space-y-2 pb-6">
                             <div className="flex items-center space-x-2">
-                              <Badge className={getActionColor(event.action)}>{event.action}</Badge>
-                              {event.verified && (
-                                <Badge variant="success" className="bg-green-100 text-green-800">
-                                  Verified
-                                </Badge>
-                              )}
+                              <Badge className={getActionColor(event.type)}>{event.type}</Badge>
+                              <Badge className="bg-green-100 text-green-800">On-chain</Badge>
                             </div>
                             <div>
-                              <p className="font-medium text-gray-900">{event.from} -&gt; {event.to}</p>
+                              <p className="font-medium text-gray-900">{event.text}</p>
                               <div className="mt-1 flex items-center space-x-4 text-sm text-gray-600">
                                 <span className="flex items-center">
-                                  <MapPin className="mr-1 h-3 w-3" />
-                                  {event.location}
-                                </span>
-                                <span className="flex items-center">
                                   <Clock className="mr-1 h-3 w-3" />
-                                  {event.timestamp}
+                                  {formatTimestamp(event.timestamp)}
                                 </span>
+                                <span className="truncate max-w-[260px]">tx: {event.txHash}</span>
                               </div>
                             </div>
                           </div>
                         </div>
                       ))}
+                      {!scannedData.journey.length && (
+                        <div className="relative flex gap-4">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-full border-4 border-white bg-gray-500">
+                            <Clock className="h-6 w-6 text-white" />
+                          </div>
+                          <div className="flex-1 space-y-2 pb-2">
+                            <p className="font-medium text-gray-900">No timeline events found for this batch.</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

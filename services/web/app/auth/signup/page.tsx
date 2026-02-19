@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -14,66 +13,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Package, Eye, EyeOff, CheckCircle } from 'lucide-react';
-
-const ROLE_STORAGE_KEY = 'chainproof-role';
+import { Package, CheckCircle, Wallet } from 'lucide-react';
+import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import type { AppRole } from '@/lib/wallet-auth';
 
 export default function SignupPage() {
   const router = useRouter();
-  const [formData, setFormData] = useState({
-    organizationName: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    role: '',
-  });
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [agreed, setAgreed] = useState(false);
+  const [requestedRole, setRequestedRole] = useState<Exclude<AppRole, 'none'> | ''>('');
+  const [privateKey, setPrivateKey] = useState('');
+  const [showPrivateKey, setShowPrivateKey] = useState(false);
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [message, setMessage] = useState('');
+  const { connectWallet, assignMyRole, account, status, error } = useWalletAuth();
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAssignRole = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setLoading(true);
-
+    setMessage('');
+    if (!privateKey.trim()) {
+      setMessage('Enter a private key before assigning role.');
+      return;
+    }
+    if (!requestedRole) {
+      setMessage('Select a role before assigning.');
+      return;
+    }
     try {
-      if (!formData.organizationName || !formData.email || !formData.password || !formData.role) {
-        setError('Please fill in all fields');
-        return;
-      }
-
-      if (formData.password !== formData.confirmPassword) {
-        setError('Passwords do not match');
-        return;
-      }
-
-      if (formData.password.length < 6) {
-        setError('Password must be at least 6 characters long');
-        return;
-      }
-
-      if (!agreed) {
-        setError('Please agree to the terms and conditions');
-        return;
-      }
-
-      window.localStorage.setItem(ROLE_STORAGE_KEY, formData.role);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      router.push('/products');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign up failed. Please try again.';
-      setError(message);
+      setIsAssigning(true);
+      await connectWallet(privateKey);
+      await assignMyRole(requestedRole);
+      setMessage('Role assigned on-chain. Redirecting to dashboard...');
+      router.push('/');
     } finally {
-      setLoading(false);
+      setIsAssigning(false);
     }
   };
 
@@ -90,9 +61,9 @@ export default function SignupPage() {
 
         <Card className="shadow-lg">
           <CardHeader className="space-y-2 text-center">
-            <CardTitle className="text-2xl">Create Account</CardTitle>
+            <CardTitle className="text-2xl">Manual Wallet Registration</CardTitle>
             <CardDescription>
-              Join ChainProof to start tracking your supply chain with blockchain verification
+              Enter a private key and assign your role on-chain immediately.
             </CardDescription>
           </CardHeader>
 
@@ -102,153 +73,97 @@ export default function SignupPage() {
                 {error}
               </div>
             )}
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Organization Name */}
-              <div className="space-y-2">
-                <Label htmlFor="organizationName" className="text-sm font-medium">
-                  Organization Name
-                </Label>
-                <Input
-                  id="organizationName"
-                  name="organizationName"
-                  placeholder="Your company or organization"
-                  value={formData.organizationName}
-                  onChange={handleChange}
-                  disabled={loading}
-                  className="bg-white"
-                />
+            {message && (
+              <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-700 border border-blue-200">
+                {message}
               </div>
-
-              {/* Role Selection */}
+            )}
+            <form onSubmit={handleAssignRole} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="private-key" className="text-sm font-medium">
+                  Private key
+                </Label>
+                <div className="flex gap-2">
+                  <input
+                    id="private-key"
+                    value={privateKey}
+                    onChange={(event) => setPrivateKey(event.target.value)}
+                    placeholder="0x..."
+                    type={showPrivateKey ? 'text' : 'password'}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    autoComplete="off"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowPrivateKey((value) => !value)}
+                    className="shrink-0"
+                  >
+                    {showPrivateKey ? 'Hide' : 'Show'}
+                  </Button>
+                </div>
+                <p className="text-xs text-amber-700">
+                  Test-only mode: this key is saved in localStorage on this browser.
+                </p>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="role" className="text-sm font-medium">
                   Role
                 </Label>
-                <Select value={formData.role} onValueChange={(value) => setFormData({ ...formData, role: value })}>
+                <Select value={requestedRole} onValueChange={(value) => setRequestedRole(value as Exclude<AppRole, 'none'>)}>
                   <SelectTrigger className="bg-white">
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="producer">Producer - Create products and batches</SelectItem>
+                    <SelectItem value="processor">Processor - Split, merge, and transform batches</SelectItem>
+                    <SelectItem value="warehouse">Warehouse - Receive, split, merge, and transfer custody</SelectItem>
                     <SelectItem value="transporter">Transporter - Move shipments</SelectItem>
-                    <SelectItem value="processor">Processor - Process and handle goods</SelectItem>
                     <SelectItem value="customer">Customer - Verify product authenticity</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Email */}
-              <div className="space-y-2">
-                <Label htmlFor="email" className="text-sm font-medium">
-                  Email Address
-                </Label>
-                <Input
-                  id="email"
-                  name="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={formData.email}
-                  onChange={handleChange}
-                  disabled={loading}
-                  className="bg-white"
-                />
+              <div className="rounded-lg border-2 border-dashed border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+                <p className="font-medium">Connected account</p>
+                <p className="mt-1 break-all">{account || 'Not connected yet'}</p>
               </div>
 
-              {/* Password */}
-              <div className="space-y-2">
-                <Label htmlFor="password" className="text-sm font-medium">
-                  Password
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="password"
-                    name="password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={formData.password}
-                    onChange={handleChange}
-                    disabled={loading}
-                    className="bg-white pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                    disabled={loading}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
+              {status === 'wrong_chain' && (
+                <p className="text-sm text-amber-700">
+                  RPC is on the wrong chain. Update your configured ChainProof network and retry.
+                </p>
+              )}
 
-              {/* Confirm Password */}
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword" className="text-sm font-medium">
-                  Confirm Password
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="confirmPassword"
-                    name="confirmPassword"
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={formData.confirmPassword}
-                    onChange={handleChange}
-                    disabled={loading}
-                    className="bg-white pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                    disabled={loading}
-                  >
-                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Terms Checkbox */}
-              <div className="flex items-start space-x-3">
-                <input
-                  type="checkbox"
-                  id="terms"
-                  checked={agreed}
-                  onChange={(e) => setAgreed(e.target.checked)}
-                  disabled={loading}
-                  className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <label htmlFor="terms" className="text-sm text-gray-600">
-                  I agree to the{' '}
-                  <a href="#" className="text-blue-600 hover:text-blue-700">
-                    Terms of Service
-                  </a>{' '}
-                  and{' '}
-                  <a href="#" className="text-blue-600 hover:text-blue-700">
-                    Privacy Policy
-                  </a>
-                </label>
-              </div>
-
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Creating Account...' : 'Create Account'}
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={!privateKey.trim() || !requestedRole || status === 'connecting' || isAssigning}
+              >
+                <Wallet className="mr-2 h-4 w-4" />
+                {status === 'connecting'
+                  ? 'Signing In...'
+                  : isAssigning
+                    ? 'Assigning Role...'
+                    : 'Sign In & Assign Role'}
               </Button>
             </form>
 
-            {/* Sign In Link */}
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-600">
+              This self-assignment flow is test-only and should not be used in production.
+            </div>
+
             <div className="text-center">
               <p className="text-sm text-gray-600">
-                Already have an account?{' '}
+                Already have a role?{' '}
                 <Link href="/auth/login" className="font-medium text-blue-600 hover:text-blue-700">
-                  Sign in
+                  Sign in with wallet
                 </Link>
               </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Benefits */}
         <div className="mt-8 space-y-3">
           <h3 className="text-sm font-semibold text-gray-900">Why join ChainProof?</h3>
           <div className="space-y-2 text-sm text-gray-600">

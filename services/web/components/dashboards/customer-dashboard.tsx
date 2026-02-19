@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { QrCode, Package, Shield, Search, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ReadOnlyChainCard } from './read-only-chain-card';
 
 export function CustomerDashboard() {
   const recentVerifications = [
@@ -20,6 +21,8 @@ export function CustomerDashboard() {
           Verify product authenticity and view complete supply chain traceability
         </p>
       </div>
+
+      <ReadOnlyChainCard />
 
       <Card className="border-blue-200 bg-blue-50">
         <CardHeader>

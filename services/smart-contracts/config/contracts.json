@@ -1,0 +1,36 @@
+{
+  "chainproof": {
+    "1337": {
+      "networkName": "localhost",
+      "chainId": 1337,
+      "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "version": "2.0.0",
+      "deployedAtBlock": 1,
+      "updatedAt": "2026-02-19T22:37:25.553Z"
+    },
+    "73571": {
+      "networkName": "tenderly",
+      "chainId": 73571,
+      "address": "0x2C48c5B8999C396FEa3C0520c5A7ee7052082F0f",
+      "version": "2.0.0",
+      "deployedAtBlock": 10290058,
+      "updatedAt": "2026-02-19T03:28:21.258Z"
+    },
+    "88961": {
+      "networkName": "tenderly",
+      "chainId": 88961,
+      "address": "0x2C48c5B8999C396FEa3C0520c5A7ee7052082F0f",
+      "version": "2.0.0",
+      "deployedAtBlock": 10291169,
+      "updatedAt": "2026-02-19T07:20:21.218Z"
+    },
+    "111111": {
+      "networkName": "tenderly",
+      "chainId": 111111,
+      "address": "0x2C48c5B8999C396FEa3C0520c5A7ee7052082F0f",
+      "version": "2.0.0",
+      "deployedAtBlock": 10291274,
+      "updatedAt": "2026-02-19T07:43:25.640Z"
+    }
+  }
+}
