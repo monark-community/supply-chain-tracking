@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Package, TrendingUp, MapPin, Activity, QrCode, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ReadOnlyChainCard } from './read-only-chain-card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export function ProducerDashboard() {
@@ -34,6 +35,8 @@ export function ProducerDashboard() {
           Create products, manage batches, and initiate supply chain tracking
         </p>
       </div>
+
+      <ReadOnlyChainCard />
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => {

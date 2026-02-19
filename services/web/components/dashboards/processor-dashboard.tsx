@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Factory, Package, Activity, TrendingUp, QrCode, ArrowRightLeft, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ReadOnlyChainCard } from './read-only-chain-card';
 
 export function ProcessorDashboard() {
   const stats = [
@@ -34,6 +35,8 @@ export function ProcessorDashboard() {
           Receive, split, merge, and transform batches while preserving full lineage
         </p>
       </div>
+
+      <ReadOnlyChainCard />
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => {

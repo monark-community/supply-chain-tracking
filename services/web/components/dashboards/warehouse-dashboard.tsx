@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Archive, Package, ArrowRightLeft, QrCode, Boxes, CheckCircle, TrendingUp } from 'lucide-react';
+import { ReadOnlyChainCard } from './read-only-chain-card';
+import { Archive, Package, ArrowRightLeft, QrCode, Boxes, TrendingUp } from 'lucide-react';
 
 export function WarehouseDashboard() {
   const stats = [
@@ -33,6 +34,8 @@ export function WarehouseDashboard() {
           Receive, split, merge, and transfer batches while preserving custody and lineage
         </p>
       </div>
+
+      <ReadOnlyChainCard />
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => {
