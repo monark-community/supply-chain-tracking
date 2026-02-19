@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # 1 Blockchain in debug mode
   chain:
@@ -7,7 +5,7 @@ services:
     platform: linux/arm64/v8
     working_dir: /app
     volumes:
-      - ./smart-contracts 2:/app
+      - ./services/smart-contracts:/app
 
     # this is to keep alive forever, do not run anything yet
     command: sh -c "npm install && npx hardhat node --hostname 0.0.0.0 --port 8545"
@@ -21,7 +19,13 @@ services:
     platform: linux/arm64/v8
     working_dir: /app
     volumes:
-      - ./dashboard:/app
+      - ./services/smart-contracts/dashboard:/app
+      - ./services/smart-contracts/config:/config:ro
+    environment:
+      CHAINPROOF_RPC_URL: ${CHAINPROOF_RPC_URL:-http://chain:8545}
+      CHAINPROOF_CHAIN_ID: ${CHAINPROOF_CHAIN_ID:-1337}
+      CHAINPROOF_CONTRACT_KEY: ${CHAINPROOF_CONTRACT_KEY:-chainproof}
+      CHAINPROOF_REGISTRY_PATH: ${CHAINPROOF_REGISTRY_PATH:-/config/contracts.json}
     command: sh -c "pip install web3 streamlit && streamlit run app.py"
     ports:
       - "8501:8501"

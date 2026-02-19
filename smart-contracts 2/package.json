@@ -1,8 +1,0 @@
-{
-  "name": "chainproof-contracts",
-  "version": "1.0.0",
-  "devDependencies": {
-    "hardhat": "^2.19.0",
-    "@nomicfoundation/hardhat-toolbox": "^4.0.0"
-  }
-}
