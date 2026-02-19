@@ -1,10 +1,15 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Package, MapPin, FileText, LayoutDashboard, QrCode, Wallet } from 'lucide-react';
+import { Package, MapPin, FileText, LayoutDashboard, QrCode } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { useWalletAuth } from './auth/wallet-auth-provider';
+import type { AppRole } from '@/lib/wallet-auth';
+import { shortenAddress } from '@/lib/wallet-auth';
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Products', href: '/products', icon: Package },
@@ -15,6 +20,20 @@ const navigation = [
 
 export function Nav() {
   const pathname = usePathname();
+  const [nextRole, setNextRole] = useState<Exclude<AppRole, 'none'> | ''>('');
+  const [isChangingRole, setIsChangingRole] = useState(false);
+  const { isConnected, disconnectWallet, account, role, assignMyRole } = useWalletAuth();
+
+  const handleChangeRole = async () => {
+    if (!nextRole) return;
+    try {
+      setIsChangingRole(true);
+      await assignMyRole(nextRole);
+      setNextRole('');
+    } finally {
+      setIsChangingRole(false);
+    }
+  };
 
   return (
     <div className="border-b border-gray-200 bg-white">
@@ -50,13 +69,39 @@ export function Nav() {
             </nav>
           </div>
           <div className="flex items-center space-x-4">
-            <Button variant="outline" size="sm">
-              <Wallet className="mr-2 h-4 w-4" />
-              Connect Wallet
-            </Button>
-            <Link href="/auth/login">
-              <Button size="sm">Sign In</Button>
-            </Link>
+            {isConnected ? (
+              <>
+                <div className="hidden rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 sm:block">
+                  {shortenAddress(account || '')} • {role}
+                </div>
+                <div className="hidden items-center gap-2 lg:flex">
+                  <Select value={nextRole} onValueChange={(value) => setNextRole(value as Exclude<AppRole, 'none'>)}>
+                    <SelectTrigger className="h-8 w-[170px] text-xs">
+                      <SelectValue placeholder="Change my role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="producer">Producer</SelectItem>
+                      <SelectItem value="processor">Processor</SelectItem>
+                      <SelectItem value="warehouse">Warehouse</SelectItem>
+                      <SelectItem value="transporter">Transporter</SelectItem>
+                      <SelectItem value="customer">Customer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" variant="outline" onClick={() => void handleChangeRole()} disabled={!nextRole || isChangingRole}>
+                    {isChangingRole ? 'Assigning...' : 'Apply'}
+                  </Button>
+                </div>
+                <Button variant="outline" size="sm" onClick={disconnectWallet}>
+                  Disconnect
+                </Button>
+              </>
+            ) : (
+              <>
+                <Link href="/auth/login">
+                  <Button size="sm">Sign In</Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>

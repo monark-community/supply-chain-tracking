@@ -123,6 +123,12 @@ contract ChainProof {
         emit RoleAssigned(account, role, msg.sender, block.timestamp);
     }
 
+    // Test-mode helper: allow connected wallet to self-assign role.
+    function assignMyRole(Role role) external {
+        roles[msg.sender] = role;
+        emit RoleAssigned(msg.sender, role, msg.sender, block.timestamp);
+    }
+
     function harvestBatch(
         string calldata origin,
         string calldata ipfsHash,

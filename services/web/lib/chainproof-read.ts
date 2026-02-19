@@ -1,7 +1,6 @@
 'use client';
 
-import { BrowserProvider, Contract, JsonRpcProvider } from 'ethers';
-import type { Eip1193Provider } from 'ethers';
+import { Contract, JsonRpcProvider } from 'ethers';
 
 export const ROLE_LABELS: Record<number, string> = {
   0: 'None',
@@ -38,7 +37,7 @@ type EventArgMap = Record<string, unknown>;
 type EventLike = { args?: EventArgMap; transactionHash: string };
 
 export type ChainproofReadContext = {
-  provider: BrowserProvider | JsonRpcProvider;
+  provider: JsonRpcProvider;
   contract: Contract;
   chainId: number;
   contractAddress: string;
@@ -57,17 +56,6 @@ async function fetchRegistry(): Promise<RegistryShape> {
 }
 
 async function getProvider() {
-  const ethereum =
-    typeof window !== 'undefined'
-      ? (window as Window & { ethereum?: Eip1193Provider }).ethereum
-      : undefined;
-  if (ethereum) {
-    try {
-      return new BrowserProvider(ethereum);
-    } catch {
-      return new JsonRpcProvider(defaultRpcUrl);
-    }
-  }
   return new JsonRpcProvider(defaultRpcUrl);
 }
 

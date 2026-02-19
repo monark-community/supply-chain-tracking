@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Nav } from '@/components/nav';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,10 +18,40 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Plus, Search, QrCode, Clock, Package } from 'lucide-react';
+import { harvestProducerBatch } from '@/lib/chainproof-write';
+
+type BatchItem = {
+  id: string;
+  batchNumber: string;
+  product: string;
+  quantity: number;
+  currentQuantity: number;
+  status: string;
+  currentLocation: string;
+  currentCustodian: string;
+  lastUpdate: string;
+  traces: number;
+};
+
+type HarvestFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
+  newBatchId?: number | null;
+  chainId?: number;
+  contractAddress?: string;
+  ipfsHash?: string;
+};
+
+function shortenAddress(value: string) {
+  if (!value || value.length < 10) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
 
 export default function BatchesPage() {
+  const searchParams = useSearchParams();
   const [searchTerm, setSearchTerm] = useState('');
-  const [batches] = useState([
+  const [batches, setBatches] = useState<BatchItem[]>([
     {
       id: '1',
       batchNumber: 'BATCH-1K5A2-XYZ12',
@@ -70,6 +101,75 @@ export default function BatchesPage() {
       traces: 2,
     },
   ]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [origin, setOrigin] = useState('');
+  const [quantityInput, setQuantityInput] = useState('');
+  const [trackingCode, setTrackingCode] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<HarvestFeedback | null>(null);
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'harvest') {
+      setDialogOpen(true);
+    }
+  }, [searchParams]);
+
+  const resetForm = () => {
+    setOrigin('');
+    setQuantityInput('');
+    setTrackingCode('');
+  };
+
+  const handleCreateBatch = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setFeedback(null);
+
+    try {
+      const quantity = Number(quantityInput);
+      const result = await harvestProducerBatch({
+        origin,
+        quantity,
+        trackingCode,
+      });
+
+      setBatches((current) => [
+        {
+          id: result.newBatchId ? String(result.newBatchId) : `new-${Date.now()}`,
+          batchNumber: trackingCode.trim(),
+          product: origin.trim(),
+          quantity,
+          currentQuantity: quantity,
+          status: 'created',
+          currentLocation: 'On-chain harvest',
+          currentCustodian: shortenAddress(result.account),
+          lastUpdate: 'just now',
+          traces: 1,
+        },
+        ...current,
+      ]);
+
+      setFeedback({
+        type: 'success',
+        message: 'Batch harvested on-chain successfully.',
+        txHash: result.txHash,
+        newBatchId: result.newBatchId,
+        chainId: result.chainId,
+        contractAddress: result.contractAddress,
+        ipfsHash: result.ipfsHash,
+      });
+      resetForm();
+      setDialogOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create batch.';
+      setFeedback({
+        type: 'error',
+        message,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -103,7 +203,7 @@ export default function BatchesPage() {
             <h1 className="text-3xl font-bold text-gray-900">Product Batches</h1>
             <p className="mt-2 text-gray-600">Track individual product batches through the supply chain</p>
           </div>
-          <Dialog>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
@@ -111,34 +211,70 @@ export default function BatchesPage() {
               </Button>
             </DialogTrigger>
             <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create Product Batch</DialogTitle>
-                <DialogDescription>Start tracking a new batch of products</DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="product">Product</Label>
-                  <Input id="product" placeholder="Select or enter product name" />
+              <form onSubmit={handleCreateBatch}>
+                <DialogHeader>
+                  <DialogTitle>Create Product Batch</DialogTitle>
+                  <DialogDescription>
+                    Submit a Producer harvest transaction. Temporary IPFS hash will be generated automatically.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="origin">Origin / Product Label</Label>
+                    <Input
+                      id="origin"
+                      value={origin}
+                      onChange={(e) => setOrigin(e.target.value)}
+                      placeholder="e.g., Ethiopia - Yirgacheffe"
+                      disabled={submitting}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="tracking-code">Tracking Code</Label>
+                    <Input
+                      id="tracking-code"
+                      value={trackingCode}
+                      onChange={(e) => setTrackingCode(e.target.value)}
+                      placeholder="e.g., BATCH-2026-001"
+                      disabled={submitting}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="quantity">Quantity</Label>
+                    <Input
+                      id="quantity"
+                      type="number"
+                      value={quantityInput}
+                      onChange={(e) => setQuantityInput(e.target.value)}
+                      placeholder="e.g., 5000"
+                      min={1}
+                      disabled={submitting}
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="quantity">Quantity</Label>
-                  <Input id="quantity" type="number" placeholder="e.g., 5000" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="location">Current Location</Label>
-                  <Input id="location" placeholder="e.g., Mumbai, India" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="custodian">Current Custodian</Label>
-                  <Input id="custodian" placeholder="Enter organization name" />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button type="submit">Create Batch</Button>
-              </DialogFooter>
+                {feedback?.type === 'error' && <p className="pb-3 text-sm text-red-600">{feedback.message}</p>}
+                <DialogFooter>
+                  <Button type="submit" disabled={submitting}>
+                    {submitting ? 'Submitting transaction...' : 'Create Batch'}
+                  </Button>
+                </DialogFooter>
+              </form>
             </DialogContent>
           </Dialog>
         </div>
+
+        {feedback?.type === 'success' && (
+          <Card className="mb-6 border-green-200 bg-green-50">
+            <CardContent className="space-y-1 pt-6 text-sm text-green-900">
+              <p className="font-medium">{feedback.message}</p>
+              <p>Batch ID: {feedback.newBatchId ?? 'Pending event parse'}</p>
+              <p>Chain: {feedback.chainId}</p>
+              <p>Contract: {feedback.contractAddress}</p>
+              <p className="break-all">Tx Hash: {feedback.txHash}</p>
+              <p className="break-all">Temp IPFS: {feedback.ipfsHash}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <div className="mb-6">
           <div className="relative">

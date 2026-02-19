@@ -111,7 +111,7 @@ export function ProducerDashboard() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2 sm:grid-cols-3">
-                <Link href="/batches">
+                <Link href="/batches?action=harvest">
                   <Button className="w-full">
                     <MapPin className="mr-2 h-4 w-4" />
                     Create New Batch
