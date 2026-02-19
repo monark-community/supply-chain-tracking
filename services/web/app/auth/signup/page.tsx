@@ -132,7 +132,8 @@ export default function SignupPage() {
                   <SelectContent>
                     <SelectItem value="producer">Producer - Create products and batches</SelectItem>
                     <SelectItem value="transporter">Transporter - Move shipments</SelectItem>
-                    <SelectItem value="processor">Processor - Process and handle goods</SelectItem>
+                    <SelectItem value="processor">Processor - Split, merge, and transform batches</SelectItem>
+                    <SelectItem value="warehouse">Warehouse - Receive, split, merge, and transfer custody</SelectItem>
                     <SelectItem value="customer">Customer - Verify product authenticity</SelectItem>
                   </SelectContent>
                 </Select>

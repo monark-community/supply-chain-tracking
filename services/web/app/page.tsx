@@ -6,10 +6,11 @@ import { ProducerDashboard } from '@/components/dashboards/producer-dashboard';
 import { TransporterDashboard } from '@/components/dashboards/transporter-dashboard';
 import { ProcessorDashboard } from '@/components/dashboards/processor-dashboard';
 import { CustomerDashboard } from '@/components/dashboards/customer-dashboard';
+import { WarehouseDashboard } from '@/components/dashboards/warehouse-dashboard';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-type Role = 'producer' | 'transporter' | 'processor' | 'customer';
+type Role = 'producer' | 'transporter' | 'processor' | 'warehouse' | 'customer';
 
 const ROLE_STORAGE_KEY = 'chainproof-role';
 
@@ -36,6 +37,8 @@ export default function Home() {
         return <TransporterDashboard />;
       case 'processor':
         return <ProcessorDashboard />;
+      case 'warehouse':
+        return <WarehouseDashboard />;
       case 'customer':
         return <CustomerDashboard />;
       default:
@@ -57,6 +60,7 @@ export default function Home() {
               <SelectItem value="producer">Producer</SelectItem>
               <SelectItem value="transporter">Transporter</SelectItem>
               <SelectItem value="processor">Processor</SelectItem>
+              <SelectItem value="warehouse">Warehouse</SelectItem>
               <SelectItem value="customer">Customer</SelectItem>
             </SelectContent>
           </Select>

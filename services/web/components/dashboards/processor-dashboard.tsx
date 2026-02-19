@@ -31,7 +31,7 @@ export function ProcessorDashboard() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Processor Dashboard</h1>
         <p className="mt-2 text-gray-600">
-          Receive shipments, perform processing operations, and manage custody transfers
+          Receive, split, merge, and transform batches while preserving full lineage
         </p>
       </div>
 
@@ -155,27 +155,27 @@ export function ProcessorDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Event Types You Can Log</CardTitle>
-          <CardDescription>Processing operations available to processors</CardDescription>
+          <CardTitle>Processing Operations</CardTitle>
+          <CardDescription>Processor-only and shared operations</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">Processing Actions</h4>
+              <h4 className="font-semibold text-gray-900 mb-2">Shared With Warehouse</h4>
               <ul className="space-y-1 text-sm text-gray-700">
-                <li>• Cleaning operations</li>
-                <li>• Sorting and grading</li>
-                <li>• Packaging and labeling</li>
-                <li>• Storage and handling</li>
+                <li>• Receive custody</li>
+                <li>• Transfer custody</li>
+                <li>• Split batches</li>
+                <li>• Merge batches</li>
               </ul>
             </div>
             <div className="rounded-lg border p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">Quality Checks</h4>
+              <h4 className="font-semibold text-gray-900 mb-2">Processor-Only</h4>
               <ul className="space-y-1 text-sm text-gray-700">
-                <li>• Visual inspection</li>
-                <li>• Temperature logging</li>
-                <li>• Humidity monitoring</li>
-                <li>• Condition assessment</li>
+                <li>• Transform one or more inputs</li>
+                <li>• Create processed output batches</li>
+                <li>• Link output to consumed inputs</li>
+                <li>• Maintain process lineage records</li>
               </ul>
             </div>
           </div>
@@ -197,8 +197,8 @@ export function ProcessorDashboard() {
                 <li>• Scan QR codes</li>
                 <li>• Receive shipments (take custody)</li>
                 <li>• Transfer shipments (pass custody)</li>
-                <li>• Log processing events</li>
-                <li>• Perform quality inspections</li>
+                <li>• Split and merge batches</li>
+                <li>• Transform batches (processor only)</li>
                 <li>• View shipment history</li>
               </ul>
             </div>
@@ -208,8 +208,8 @@ export function ProcessorDashboard() {
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
                 <li>• Create products</li>
-                <li>• Create batches</li>
-                <li>• Initiate supply chain</li>
+                <li>• Harvest root batches</li>
+                <li>• Assign participant roles</li>
               </ul>
             </div>
           </div>
