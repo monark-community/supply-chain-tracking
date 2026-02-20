@@ -15,6 +15,7 @@
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
+#include "dht.h"
 
 #include "os/os_mbuf.h"
 #include "nimble/nimble_port.h"
@@ -24,22 +25,25 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #define DHT_GPIO              GPIO_NUM_4
-#define SAMPLE_PERIOD_MS      5000
+#define SAMPLE_PERIOD_MS      3000
+#define DHT_STARTUP_DELAY_MS  2000
+#define DHT_READ_RETRIES      3
+#define DHT_RETRY_DELAY_MS    30
 
-#define TEMP_MIN_ALLOWED_C    (-10.0f)
-#define TEMP_MAX_ALLOWED_C    (60.0f)
-#define HUMI_MIN_ALLOWED_PCT  (0.0f)
-#define HUMI_MAX_ALLOWED_PCT  (100.0f)
+#define TEMP_MIN_ALLOWED_C    (10.0f)
+#define TEMP_MAX_ALLOWED_C    (30.0f)
+#define HUMI_MIN_ALLOWED_PCT  (5.0f)
+#define HUMI_MAX_ALLOWED_PCT  (50.0f)
 
 #define FLAG_OK        0x0
 #define FLAG_TEMP_OOR  0x1
 #define FLAG_HUMI_OOR  0x2
 
-#define MANUAL_MODE 1
-#define MAN_TEMP_MIN  10.0f
+#define MANUAL_MODE 0
+#define MAN_TEMP_MIN  15.0f
 #define MAN_TEMP_MAX  30.0f
 #define MAN_HUMI_MIN  20.0f
-#define MAN_HUMI_MAX  60.0f
+#define MAN_HUMI_MAX  70.0f
 #define MAN_FLAG      2
 
 #define HISTORY_MAX 256
@@ -103,65 +107,19 @@ static const char *BLE_CHAR_PAYLOAD_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef
 static const char *BLE_CHAR_CTRL_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1003";
 static const char *BLE_CHAR_HIST_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1004";
 
-static inline int wait_level(gpio_num_t pin, int level, uint32_t timeout_us)
-{
-    uint32_t t = 0;
-    while (gpio_get_level(pin) != level) {
-        if (t++ >= timeout_us) return -1;
-        esp_rom_delay_us(1);
-    }
-    return 0;
-}
-
-static inline int measure_level(gpio_num_t pin, int level, uint32_t timeout_us, uint32_t *dur_us)
-{
-    uint32_t t = 0;
-    while (gpio_get_level(pin) == level) {
-        if (t++ >= timeout_us) return -1;
-        esp_rom_delay_us(1);
-    }
-    *dur_us = t;
-    return 0;
-}
-
 static esp_err_t dht22_read(gpio_num_t pin, float *temp_c, float *humi_pct)
 {
-    uint8_t data[5] = {0};
+    float h = NAN;
+    float t = NAN;
 
-    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
-    gpio_set_level(pin, 0);
-    vTaskDelay(pdMS_TO_TICKS(2));
-    gpio_set_level(pin, 1);
-    esp_rom_delay_us(40);
-    gpio_set_direction(pin, GPIO_MODE_INPUT);
+    esp_err_t rc = dht_read_float_data(DHT_TYPE_AM2301, pin, &h, &t);
+    if (rc != ESP_OK) return rc;
 
-    if (wait_level(pin, 0, 100) != 0) return ESP_ERR_TIMEOUT;
-    if (wait_level(pin, 1, 100) != 0) return ESP_ERR_TIMEOUT;
-    if (wait_level(pin, 0, 100) != 0) return ESP_ERR_TIMEOUT;
+    // Guard against ghost frames observed as repeated 0.00/0.00 values.
+    if (fabsf(t) < 0.001f && fabsf(h) < 0.001f) return ESP_ERR_INVALID_RESPONSE;
 
-    for (int i = 0; i < 40; i++) {
-        if (wait_level(pin, 1, 70) != 0) return ESP_ERR_TIMEOUT;
-        uint32_t high_us = 0;
-        if (measure_level(pin, 1, 120, &high_us) != 0) return ESP_ERR_TIMEOUT;
-        int bit = (high_us > 40) ? 1 : 0;
-        data[i / 8] = (uint8_t)((data[i / 8] << 1) | (uint8_t)bit);
-    }
-
-    uint8_t sum = (uint8_t)(data[0] + data[1] + data[2] + data[3]);
-    if (sum != data[4]) return ESP_ERR_INVALID_CRC;
-
-    uint16_t rh = (uint16_t)((data[0] << 8) | data[1]);
-    uint16_t rt = (uint16_t)((data[2] << 8) | data[3]);
-
-    float hum = rh / 10.0f;
-
-    bool neg = (rt & 0x8000) != 0;
-    rt &= 0x7FFF;
-    float temp = rt / 10.0f;
-    if (neg) temp = -temp;
-
-    *temp_c = temp;
-    *humi_pct = hum;
+    *temp_c = t;
+    *humi_pct = h;
     return ESP_OK;
 }
 
@@ -321,10 +279,19 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     if (attr_handle == g_attr_handle_payload) {
         if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
             payload_t snap;
+            int rc;
             xSemaphoreTake(g_lock, portMAX_DELAY);
             snap = g_payload;
+            rc = os_mbuf_append(ctxt->om, &snap, sizeof(snap));
+            if (rc == 0) {
+                g_payload.temp_min = 0.0f;
+                g_payload.temp_max = 0.0f;
+                g_payload.humi_min = 0.0f;
+                g_payload.humi_max = 0.0f;
+                g_payload.flag2 = FLAG_OK;
+                g_initialized = false;
+            }
             xSemaphoreGive(g_lock);
-            int rc = os_mbuf_append(ctxt->om, &snap, sizeof(snap));
             return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
         }
         return BLE_ATT_ERR_UNLIKELY;
@@ -449,25 +416,31 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 static void adv_start(void)
 {
     struct ble_gap_adv_params advp;
-    struct ble_hs_adv_fields fields;
+    struct ble_hs_adv_fields adv_fields;
+    struct ble_hs_adv_fields rsp_fields;
     const char *name = ble_svc_gap_device_name();
     int rc;
 
-    memset(&fields, 0, sizeof(fields));
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.tx_pwr_lvl_is_present = 1;
-    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
-    fields.name = (uint8_t *)name;
-    fields.name_len = (uint8_t)strlen(name);
-    fields.name_is_complete = 1;
+    memset(&adv_fields, 0, sizeof(adv_fields));
+    adv_fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    adv_fields.uuids128 = (const ble_uuid128_t *)&g_svc_uuid;
+    adv_fields.num_uuids128 = 1;
+    adv_fields.uuids128_is_complete = 1;
 
-    fields.uuids128 = (const ble_uuid128_t *)&g_svc_uuid;
-    fields.num_uuids128 = 1;
-    fields.uuids128_is_complete = 1;
-
-    rc = ble_gap_adv_set_fields(&fields);
+    rc = ble_gap_adv_set_fields(&adv_fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_adv_set_fields failed rc=%d", rc);
+        return;
+    }
+
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+    rsp_fields.name = (uint8_t *)name;
+    rsp_fields.name_len = (uint8_t)strlen(name);
+    rsp_fields.name_is_complete = 1;
+
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed rc=%d", rc);
         return;
     }
 
@@ -510,20 +483,47 @@ static void sensor_task(void *param)
 
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << DHT_GPIO),
-        .mode = GPIO_MODE_INPUT_OUTPUT_OD,
+        .mode = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io);
     gpio_set_level(DHT_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(DHT_STARTUP_DELAY_MS));
 
     while (1) {
         float t = NAN, h = NAN;
-        esp_err_t err = dht22_read(DHT_GPIO, &t, &h);
+        esp_err_t err = ESP_FAIL;
+        int last_level = gpio_get_level(DHT_GPIO);
+        for (int attempt = 1; attempt <= DHT_READ_RETRIES; attempt++) {
+            err = dht22_read(DHT_GPIO, &t, &h);
+            if (err == ESP_OK) {
+                break;
+            }
+            last_level = gpio_get_level(DHT_GPIO);
+            if (attempt < DHT_READ_RETRIES) {
+                vTaskDelay(pdMS_TO_TICKS(DHT_RETRY_DELAY_MS));
+            }
+        }
         if (err == ESP_OK) {
             update_payload(t, h);
             notify_payload();
+
+            payload_t snap;
+            xSemaphoreTake(g_lock, portMAX_DELAY);
+            snap = g_payload;
+            xSemaphoreGive(g_lock);
+
+            ESP_LOGI(TAG,
+                     "Sample t=%.2fC h=%.2f%% | minmax t=[%.2f, %.2f] h=[%.2f, %.2f] flag=0x%02X",
+                     t, h,
+                     snap.temp_min, snap.temp_max,
+                     snap.humi_min, snap.humi_max,
+                     snap.flag2);
+        } else {
+            ESP_LOGW(TAG, "DHT22 read failed after %d retries: %s (line_level=%d gpio=%d)",
+                     DHT_READ_RETRIES, esp_err_to_name(err), last_level, (int)DHT_GPIO);
         }
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
     }
