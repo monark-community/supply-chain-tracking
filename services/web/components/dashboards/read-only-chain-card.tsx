@@ -48,12 +48,12 @@ export function ReadOnlyChainCard() {
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle>Blockchain Read-Only Mode</CardTitle>
+            <CardTitle>Blockchain Summary</CardTitle>
             <CardDescription>
-              Dashboard actions remain placeholders until write transaction integration.
+              Live on-chain contract and batch summary.
             </CardDescription>
           </div>
-          <Badge className="bg-blue-100 text-blue-800">Read-only</Badge>
+          <Badge className="bg-blue-100 text-blue-800">Live</Badge>
         </div>
       </CardHeader>
       <CardContent className="text-sm text-gray-700">
