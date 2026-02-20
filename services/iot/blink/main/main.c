@@ -98,6 +98,11 @@ static const ble_uuid128_t g_chr_uuid_ctrl =
 static const ble_uuid128_t g_chr_uuid_hist =
     BLE_UUID128_INIT(0x04,0x10,0xef,0xbe,0xed,0xfe,0x0d,0x1c,0x2b,0x3a,0x4f,0x5e,0x6d,0x7c,0x8b,0x9a);
 
+static const char *BLE_SERVICE_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1001";
+static const char *BLE_CHAR_PAYLOAD_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1002";
+static const char *BLE_CHAR_CTRL_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1003";
+static const char *BLE_CHAR_HIST_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1004";
+
 static inline int wait_level(gpio_num_t pin, int level, uint32_t timeout_us)
 {
     uint32_t t = 0;
@@ -393,18 +398,22 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
+        ESP_LOGI(TAG, "GAP connect event status=%d", event->connect.status);
         if (event->connect.status == 0) {
             g_conn_handle = event->connect.conn_handle;
             g_sub_payload = false;
             g_sub_hist = false;
+            ESP_LOGI(TAG, "Connected: conn_handle=%d. Initiating security.", g_conn_handle);
             ble_gap_security_initiate(g_conn_handle);
         } else {
             g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            ESP_LOGW(TAG, "Connection failed, restarting advertising.");
             adv_start();
         }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "Disconnected: conn_handle=%d reason=%d", event->disconnect.conn.conn_handle, event->disconnect.reason);
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         g_sub_payload = false;
         g_sub_hist = false;
@@ -417,6 +426,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
+        ESP_LOGI(TAG, "Subscribe event attr_handle=%d cur_notify=%d", event->subscribe.attr_handle, event->subscribe.cur_notify);
         if (event->subscribe.attr_handle == g_attr_handle_payload) {
             g_sub_payload = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == g_attr_handle_hist) {
@@ -425,6 +435,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
+        ESP_LOGI(TAG, "Encryption change status=%d encrypted=%d", event->enc_change.status, conn_is_encrypted(event->enc_change.conn_handle));
         if (event->enc_change.status == 0) {
             notify_payload();
         }
@@ -440,6 +451,7 @@ static void adv_start(void)
     struct ble_gap_adv_params advp;
     struct ble_hs_adv_fields fields;
     const char *name = ble_svc_gap_device_name();
+    int rc;
 
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
@@ -453,18 +465,35 @@ static void adv_start(void)
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
 
-    ble_gap_adv_set_fields(&fields);
+    rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_set_fields failed rc=%d", rc);
+        return;
+    }
 
     memset(&advp, 0, sizeof(advp));
     advp.conn_mode = BLE_GAP_CONN_MODE_UND;
     advp.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
-    ble_gap_adv_start(g_own_addr_type, NULL, BLE_HS_FOREVER, &advp, gap_event_cb, NULL);
+    rc = ble_gap_adv_start(g_own_addr_type, NULL, BLE_HS_FOREVER, &advp, gap_event_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_start failed rc=%d", rc);
+        return;
+    }
+    ESP_LOGI(TAG, "Advertising started successfully as %s", name);
 }
 
 static void on_sync(void)
 {
-    ble_hs_id_infer_auto(0, &g_own_addr_type);
+    int rc = ble_hs_id_infer_auto(0, &g_own_addr_type);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_hs_id_infer_auto failed rc=%d", rc);
+        return;
+    }
+    ESP_LOGI(TAG, "BLE synced. own_addr_type=%d", g_own_addr_type);
+    ESP_LOGI(TAG, "Service UUID: %s", BLE_SERVICE_UUID_STR);
+    ESP_LOGI(TAG, "Characteristic UUIDs: payload=%s ctrl=%s hist=%s",
+             BLE_CHAR_PAYLOAD_UUID_STR, BLE_CHAR_CTRL_UUID_STR, BLE_CHAR_HIST_UUID_STR);
     adv_start();
 }
 
@@ -542,8 +571,16 @@ void app_main(void)
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
-    ble_gatts_count_cfg(gatt_svcs);
-    ble_gatts_add_svcs(gatt_svcs);
+    int rc = ble_gatts_count_cfg(gatt_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_count_cfg failed rc=%d", rc);
+        return;
+    }
+    rc = ble_gatts_add_svcs(gatt_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_add_svcs failed rc=%d", rc);
+        return;
+    }
 
     ble_svc_gap_device_name_set("ESP32H2-DHT");
 
