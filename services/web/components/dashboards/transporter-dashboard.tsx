@@ -53,10 +53,10 @@ export function TransporterDashboard() {
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
             <QrCode className="mr-2 h-5 w-5" />
-            QR Scanner Operations
+            NFC Console Operations
           </CardTitle>
           <CardDescription className="text-blue-700">
-            Scan QR codes to receive shipments and deliver to the next handoff point
+            Use NFC taps to receive shipments and deliver to the next handoff point
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -163,7 +163,7 @@ export function TransporterDashboard() {
               </div>
               <h4 className="font-semibold text-gray-900 mb-2">Receive Shipment</h4>
               <p className="text-sm text-gray-700">
-                Scan QR at pickup location to accept custody and record transfer event
+                Tap NFC at pickup to accept custody and record transfer event
               </p>
             </div>
             <div className="rounded-lg border-2 border-gray-200 p-4">
@@ -181,7 +181,7 @@ export function TransporterDashboard() {
               </div>
               <h4 className="font-semibold text-gray-900 mb-2">Deliver Shipment</h4>
               <p className="text-sm text-gray-700">
-                Scan QR at delivery to transfer custody to the receiving location
+                Tap NFC at delivery to transfer custody to the receiving location
               </p>
             </div>
           </div>
@@ -200,7 +200,7 @@ export function TransporterDashboard() {
                 <span className="mr-2">✅</span> You Can
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Scan QR codes</li>
+                <li>• Scan NFC tags</li>
                 <li>• Receive shipments (pickup)</li>
                 <li>• Deliver shipments (drop-off)</li>
                 <li>• View shipment details</li>

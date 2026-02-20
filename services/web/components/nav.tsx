@@ -14,7 +14,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Products', href: '/products', icon: Package },
   { name: 'Batches', href: '/batches', icon: MapPin },
-  { name: 'QR Scanner', href: '/scanner', icon: QrCode },
+  { name: 'NFC Console', href: '/scanner', icon: QrCode },
   { name: 'Audit Trail', href: '/audit', icon: FileText },
 ];
 
