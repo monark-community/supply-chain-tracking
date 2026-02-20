@@ -1,13 +1,12 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { Archive, Package, ArrowRightLeft, QrCode, Boxes, TrendingUp } from 'lucide-react';
+import { Archive, Package, ArrowRightLeft, Boxes, TrendingUp } from 'lucide-react';
 import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
 
 type TxFeedback = {
@@ -126,7 +125,7 @@ export function WarehouseDashboard() {
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
-            <QrCode className="mr-2 h-5 w-5" />
+            <Archive className="mr-2 h-5 w-5" />
             Warehouse Actions
           </CardTitle>
           <CardDescription className="text-blue-700">
@@ -193,18 +192,10 @@ export function WarehouseDashboard() {
           </form>
 
           <div className="lg:col-span-2 grid gap-3 sm:grid-cols-2">
-            <Link href="/scanner">
-              <Button className="w-full" variant="outline">
-                <Boxes className="h-4 w-4 mr-2" />
-                Split / Merge (next)
-              </Button>
-            </Link>
-            <Link href="/scanner">
-              <Button className="w-full" variant="outline">
-                <QrCode className="h-4 w-4 mr-2" />
-                Scan / inspect shipment details
-              </Button>
-            </Link>
+            <Button className="w-full" variant="outline" disabled>
+              <Boxes className="h-4 w-4 mr-2" />
+              Split / Merge (next)
+            </Button>
           </div>
         </CardContent>
       </Card>

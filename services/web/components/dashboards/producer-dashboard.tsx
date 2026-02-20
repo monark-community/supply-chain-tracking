@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Package, TrendingUp, MapPin, Activity, QrCode, Search, ArrowRightLeft } from 'lucide-react';
+import { Package, TrendingUp, MapPin, Activity, Search, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -151,17 +151,11 @@ export function ProducerDashboard() {
               <CardDescription>Create batches and start shipment tracking</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-2 sm:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2">
                 <Link href="/batches?action=harvest">
                   <Button className="w-full">
                     <MapPin className="mr-2 h-4 w-4" />
                     Create New Batch
-                  </Button>
-                </Link>
-                <Link href="/scanner">
-                  <Button variant="outline" className="w-full">
-                    <QrCode className="mr-2 h-4 w-4" />
-                    Scan / Inspect
                   </Button>
                 </Link>
                 <Button variant="outline" className="w-full">

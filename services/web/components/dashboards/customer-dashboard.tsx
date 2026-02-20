@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { QrCode, Package, Shield, Search, Eye } from 'lucide-react';
+import { Package, Shield, Search, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -78,23 +77,14 @@ export function CustomerDashboard() {
         <Card className="border-2 border-gray-200">
           <CardHeader>
             <CardTitle>Verify Product</CardTitle>
-            <CardDescription>Scan QR code or search by shipment ID</CardDescription>
+            <CardDescription>Search by batch ID or tracking code</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Link href="/scanner">
-              <Button className="h-16 w-full justify-start" size="lg">
-                <QrCode className="mr-3 h-6 w-6" />
-                <div className="text-left">
-                  <div className="font-semibold">Scan QR Code</div>
-                  <div className="text-xs opacity-90">Use camera to scan product QR</div>
-                </div>
-              </Button>
-            </Link>
             <Button className="h-16 w-full justify-start" variant="outline" size="lg">
               <Search className="mr-3 h-6 w-6" />
               <div className="text-left">
-                <div className="font-semibold">Search Shipment ID</div>
-                <div className="text-xs opacity-90">Enter shipment number manually</div>
+                <div className="font-semibold">Search by Batch ID</div>
+                <div className="text-xs opacity-90">Use a tracking code or numeric batch ID</div>
               </div>
             </Button>
           </CardContent>
@@ -161,7 +151,7 @@ export function CustomerDashboard() {
       <Card>
         <CardHeader>
           <CardTitle>Recent Verifications</CardTitle>
-          <CardDescription>Products you have recently scanned</CardDescription>
+          <CardDescription>Products you have recently looked up</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -202,7 +192,7 @@ export function CustomerDashboard() {
                 <span className="mr-2">✅</span> You Can
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Scan QR codes</li>
+                <li>• Look up batches by ID or tracking code</li>
                 <li>• View shipment journey</li>
                 <li>• Verify authenticity</li>
                 <li>• Check environmental data</li>

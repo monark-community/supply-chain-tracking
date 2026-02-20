@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Truck, MapPin, Activity, Clock, QrCode, Eye } from 'lucide-react';
+import { Truck, MapPin, Activity, Clock, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -120,7 +119,7 @@ export function TransporterDashboard() {
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
-            <QrCode className="mr-2 h-5 w-5" />
+            <Truck className="mr-2 h-5 w-5" />
             Transfer Operations
           </CardTitle>
           <CardDescription className="text-blue-700">
@@ -186,14 +185,6 @@ export function TransporterDashboard() {
             </Button>
           </form>
 
-          <div className="lg:col-span-2">
-            <Link href="/scanner">
-              <Button className="w-full" variant="outline">
-                <QrCode className="mr-2 h-4 w-4" />
-                Scan / inspect shipment details
-              </Button>
-            </Link>
-          </div>
         </CardContent>
       </Card>
 
@@ -225,12 +216,9 @@ export function TransporterDashboard() {
                 Check product details and quantity
               </li>
             </ul>
-            <Link href="/scanner">
-              <Button variant="outline" className="w-full mt-4">
-                <QrCode className="mr-2 h-4 w-4" />
-                Scan to View Shipment
-              </Button>
-            </Link>
+            <p className="pt-2 text-xs text-gray-500">
+              Use the batch ID or tracking code lookup fields above to inspect shipment details.
+            </p>
           </CardContent>
         </Card>
 
@@ -281,7 +269,7 @@ export function TransporterDashboard() {
               </div>
               <h4 className="font-semibold text-gray-900 mb-2">Receive Shipment</h4>
               <p className="text-sm text-gray-700">
-                Scan QR at pickup location to accept custody and record transfer event
+                Look up by batch ID or tracking code at pickup to accept custody and record transfer
               </p>
             </div>
             <div className="rounded-lg border-2 border-gray-200 p-4">
@@ -299,7 +287,7 @@ export function TransporterDashboard() {
               </div>
               <h4 className="font-semibold text-gray-900 mb-2">Deliver Shipment</h4>
               <p className="text-sm text-gray-700">
-                Scan QR at delivery to transfer custody to the receiving location
+                Look up by batch ID or tracking code at delivery to transfer custody to the receiver
               </p>
             </div>
           </div>
@@ -318,7 +306,7 @@ export function TransporterDashboard() {
                 <span className="mr-2">✅</span> You Can
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Scan QR codes</li>
+                <li>• Look up batches by ID or tracking code</li>
                 <li>• Receive shipments (pickup)</li>
                 <li>• Deliver shipments (drop-off)</li>
                 <li>• View shipment details</li>

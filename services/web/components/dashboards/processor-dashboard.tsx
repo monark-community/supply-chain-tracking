@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Factory, Package, Activity, TrendingUp, QrCode, ArrowRightLeft, CheckCircle } from 'lucide-react';
+import { Factory, Package, Activity, TrendingUp, ArrowRightLeft, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -127,7 +126,7 @@ export function ProcessorDashboard() {
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
-            <QrCode className="mr-2 h-5 w-5" />
+            <ArrowRightLeft className="mr-2 h-5 w-5" />
             Custody Operations
           </CardTitle>
           <CardDescription className="text-blue-700">
@@ -192,14 +191,6 @@ export function ProcessorDashboard() {
               {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
             </Button>
           </form>
-          <div className="lg:col-span-2">
-            <Link href="/scanner">
-              <Button className="w-full" variant="outline">
-                <QrCode className="mr-2 h-4 w-4" />
-                Scan / inspect shipment details
-              </Button>
-            </Link>
-          </div>
         </CardContent>
       </Card>
 
@@ -231,12 +222,9 @@ export function ProcessorDashboard() {
                 Verify temperature and quality data
               </li>
             </ul>
-            <Link href="/scanner">
-              <Button variant="outline" className="w-full mt-4">
-                <QrCode className="mr-2 h-4 w-4" />
-                Scan to View Shipment
-              </Button>
-            </Link>
+            <p className="pt-2 text-xs text-gray-500">
+              Use the batch ID or tracking code lookup fields above to inspect shipment details.
+            </p>
           </CardContent>
         </Card>
 
@@ -307,7 +295,7 @@ export function ProcessorDashboard() {
                 <span className="mr-2">✅</span> You Can
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Scan QR codes</li>
+                <li>• Look up batches by ID or tracking code</li>
                 <li>• Receive shipments (take custody)</li>
                 <li>• Transfer shipments (pass custody)</li>
                 <li>• Split and merge batches</li>
