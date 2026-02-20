@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
@@ -35,12 +36,13 @@
 #define FLAG_HUMI_OOR  0x2
 
 #define MANUAL_MODE 1
-
 #define MAN_TEMP_MIN  10.0f
 #define MAN_TEMP_MAX  30.0f
 #define MAN_HUMI_MIN  20.0f
 #define MAN_HUMI_MAX  60.0f
-#define MAN_FLAG      2   // 0,1,2
+#define MAN_FLAG      2
+
+#define HISTORY_MAX 256
 
 static const char *TAG = "BLE_DHT22";
 
@@ -52,19 +54,49 @@ typedef struct __attribute__((packed)) {
     uint8_t flag2;
 } payload_t;
 
+typedef struct __attribute__((packed)) {
+    uint32_t ts_s;
+    float temp_c;
+    float humi_pct;
+    uint8_t flag2;
+    uint16_t seq;
+} rec_t;
+
 static payload_t g_payload;
 static bool g_initialized = false;
+
+static rec_t g_hist[HISTORY_MAX];
+static uint16_t g_hist_head = 0;
+static uint16_t g_hist_count = 0;
+static uint16_t g_seq = 0;
+
 static SemaphoreHandle_t g_lock;
 
 static uint8_t g_own_addr_type;
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
 static uint16_t g_attr_handle_payload;
+static uint16_t g_attr_handle_ctrl;
+static uint16_t g_attr_handle_hist;
+
+static bool g_sub_payload = false;
+static bool g_sub_hist = false;
+
+static volatile bool g_streaming = false;
+static volatile bool g_stream_req_start = false;
+static volatile bool g_stream_req_stop = false;
 
 static const ble_uuid128_t g_svc_uuid =
     BLE_UUID128_INIT(0x9a,0x8b,0x7c,0x6d,0x5e,0x4f,0x3a,0x2b,0x1c,0x0d,0xfe,0xed,0xbe,0xef,0x10,0x01);
 
-static const ble_uuid128_t g_chr_uuid =
+static const ble_uuid128_t g_chr_uuid_payload =
     BLE_UUID128_INIT(0x9a,0x8b,0x7c,0x6d,0x5e,0x4f,0x3a,0x2b,0x1c,0x0d,0xfe,0xed,0xbe,0xef,0x10,0x02);
+
+static const ble_uuid128_t g_chr_uuid_ctrl =
+    BLE_UUID128_INIT(0x9a,0x8b,0x7c,0x6d,0x5e,0x4f,0x3a,0x2b,0x1c,0x0d,0xfe,0xed,0xbe,0xef,0x10,0x03);
+
+static const ble_uuid128_t g_chr_uuid_hist =
+    BLE_UUID128_INIT(0x9a,0x8b,0x7c,0x6d,0x5e,0x4f,0x3a,0x2b,0x1c,0x0d,0xfe,0xed,0xbe,0xef,0x10,0x04);
 
 static inline int wait_level(gpio_num_t pin, int level, uint32_t timeout_us)
 {
@@ -135,6 +167,22 @@ static uint8_t compute_flag(float t, float h)
     return FLAG_OK;
 }
 
+static void hist_push(float t, float h, uint8_t flag2)
+{
+    uint32_t ts_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+
+    rec_t r;
+    r.ts_s = ts_s;
+    r.temp_c = t;
+    r.humi_pct = h;
+    r.flag2 = flag2;
+    r.seq = g_seq++;
+
+    g_hist[g_hist_head] = r;
+    g_hist_head = (uint16_t)((g_hist_head + 1) % HISTORY_MAX);
+    if (g_hist_count < HISTORY_MAX) g_hist_count++;
+}
+
 static void update_payload(float t, float h)
 {
     xSemaphoreTake(g_lock, portMAX_DELAY);
@@ -155,17 +203,23 @@ static void update_payload(float t, float h)
     }
 
     g_payload.flag2 = flag;
+    hist_push(t, h, flag);
 
     xSemaphoreGive(g_lock);
 }
 
-static void maybe_notify(void)
+static bool conn_is_encrypted(uint16_t conn_handle)
+{
+    struct ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(conn_handle, &desc) != 0) return false;
+    return desc.sec_state.encrypted;
+}
+
+static void notify_payload(void)
 {
     if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
-
-    struct ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(g_conn_handle, &desc) != 0) return;
-    if (!desc.sec_state.encrypted) return;
+    if (!g_sub_payload) return;
+    if (!conn_is_encrypted(g_conn_handle)) return;
 
     payload_t snap;
     xSemaphoreTake(g_lock, portMAX_DELAY);
@@ -177,26 +231,126 @@ static void maybe_notify(void)
     ble_gatts_notify_custom(g_conn_handle, g_attr_handle_payload, om);
 }
 
+static void hist_clear(void)
+{
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    g_hist_head = 0;
+    g_hist_count = 0;
+    xSemaphoreGive(g_lock);
+}
+
+static uint16_t hist_get_count(void)
+{
+    uint16_t c;
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    c = g_hist_count;
+    xSemaphoreGive(g_lock);
+    return c;
+}
+
+static rec_t hist_get_at_oldest(uint16_t idx)
+{
+    rec_t r;
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    uint16_t count = g_hist_count;
+    if (idx >= count) {
+        memset(&r, 0, sizeof(r));
+    } else {
+        uint16_t start = (uint16_t)((g_hist_head + HISTORY_MAX - count) % HISTORY_MAX);
+        uint16_t pos = (uint16_t)((start + idx) % HISTORY_MAX);
+        r = g_hist[pos];
+    }
+    xSemaphoreGive(g_lock);
+    return r;
+}
+
+static void history_stream_task(void *param)
+{
+    (void)param;
+
+    while (1) {
+        if (!g_stream_req_start) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        g_stream_req_start = false;
+        g_stream_req_stop = false;
+
+        if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) continue;
+        if (!g_sub_hist) continue;
+        if (!conn_is_encrypted(g_conn_handle)) continue;
+
+        g_streaming = true;
+
+        uint16_t count = hist_get_count();
+        for (uint16_t i = 0; i < count; i++) {
+            if (g_stream_req_stop) break;
+            if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) break;
+            if (!g_sub_hist) break;
+            if (!conn_is_encrypted(g_conn_handle)) break;
+
+            rec_t r = hist_get_at_oldest(i);
+
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(&r, sizeof(r));
+            if (!om) break;
+
+            int rc = ble_gatts_notify_custom(g_conn_handle, g_attr_handle_hist, om);
+            if (rc != 0) break;
+
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+
+        g_streaming = false;
+        g_stream_req_stop = false;
+    }
+}
+
 static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                           struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    (void)attr_handle;
     (void)arg;
 
-    struct ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(conn_handle, &desc) == 0) {
-        if (!desc.sec_state.encrypted) return BLE_ATT_ERR_INSUFFICIENT_ENC;
-    } else {
+    if (!conn_is_encrypted(conn_handle)) return BLE_ATT_ERR_INSUFFICIENT_ENC;
+
+    if (attr_handle == g_attr_handle_payload) {
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            payload_t snap;
+            xSemaphoreTake(g_lock, portMAX_DELAY);
+            snap = g_payload;
+            xSemaphoreGive(g_lock);
+            int rc = os_mbuf_append(ctxt->om, &snap, sizeof(snap));
+            return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        payload_t snap;
-        xSemaphoreTake(g_lock, portMAX_DELAY);
-        snap = g_payload;
-        xSemaphoreGive(g_lock);
-        int rc = os_mbuf_append(ctxt->om, &snap, sizeof(snap));
-        return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    if (attr_handle == g_attr_handle_ctrl) {
+        if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            uint8_t cmd = 0;
+            uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+            if (len < 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            if (os_mbuf_copydata(ctxt->om, 0, 1, &cmd) != 0) return BLE_ATT_ERR_UNLIKELY;
+
+            if (cmd == 0x01) {
+                g_stream_req_start = true;
+                return 0;
+            }
+            if (cmd == 0x02) {
+                g_stream_req_stop = true;
+                return 0;
+            }
+            if (cmd == 0x03) {
+                hist_clear();
+                return 0;
+            }
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    if (attr_handle == g_attr_handle_hist) {
+        return BLE_ATT_ERR_UNLIKELY;
     }
 
     return BLE_ATT_ERR_UNLIKELY;
@@ -208,10 +362,22 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
         .uuid = &g_svc_uuid.u,
         .characteristics = (struct ble_gatt_chr_def[]){
             {
-                .uuid = &g_chr_uuid.u,
+                .uuid = &g_chr_uuid_payload.u,
                 .access_cb = gatt_access_cb,
                 .val_handle = &g_attr_handle_payload,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                .uuid = &g_chr_uuid_ctrl.u,
+                .access_cb = gatt_access_cb,
+                .val_handle = &g_attr_handle_ctrl,
+                .flags = BLE_GATT_CHR_F_WRITE,
+            },
+            {
+                .uuid = &g_chr_uuid_hist.u,
+                .access_cb = gatt_access_cb,
+                .val_handle = &g_attr_handle_hist,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
             },
             {0}
         },
@@ -229,6 +395,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             g_conn_handle = event->connect.conn_handle;
+            g_sub_payload = false;
+            g_sub_hist = false;
             ble_gap_security_initiate(g_conn_handle);
         } else {
             g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -238,11 +406,28 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        g_sub_payload = false;
+        g_sub_hist = false;
+        g_stream_req_stop = true;
         adv_start();
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
         adv_start();
+        return 0;
+
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        if (event->subscribe.attr_handle == g_attr_handle_payload) {
+            g_sub_payload = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == g_attr_handle_hist) {
+            g_sub_hist = event->subscribe.cur_notify;
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        if (event->enc_change.status == 0) {
+            notify_payload();
+        }
         return 0;
 
     default:
@@ -263,6 +448,10 @@ static void adv_start(void)
     fields.name = (uint8_t *)name;
     fields.name_len = (uint8_t)strlen(name);
     fields.name_is_complete = 1;
+
+    fields.uuids128 = (const ble_uuid128_t *)&g_svc_uuid;
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
 
     ble_gap_adv_set_fields(&fields);
 
@@ -305,7 +494,7 @@ static void sensor_task(void *param)
         esp_err_t err = dht22_read(DHT_GPIO, &t, &h);
         if (err == ESP_OK) {
             update_payload(t, h);
-            maybe_notify();
+            notify_payload();
         }
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
     }
@@ -321,7 +510,7 @@ void app_main(void)
 
     g_lock = xSemaphoreCreateMutex();
 
-    #if MANUAL_MODE
+#if MANUAL_MODE
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_payload.temp_min = MAN_TEMP_MIN;
     g_payload.temp_max = MAN_TEMP_MAX;
@@ -329,16 +518,15 @@ void app_main(void)
     g_payload.humi_max = MAN_HUMI_MAX;
     g_payload.flag2    = (uint8_t)MAN_FLAG;
     g_initialized = true;
+    hist_push((MAN_TEMP_MIN + MAN_TEMP_MAX) * 0.5f, (MAN_HUMI_MIN + MAN_HUMI_MAX) * 0.5f, (uint8_t)MAN_FLAG);
     xSemaphoreGive(g_lock);
-    #endif
-
-    #if !MANUAL_MODE
+#else
     g_payload.temp_min = 0.0f;
     g_payload.temp_max = 0.0f;
     g_payload.humi_min = 0.0f;
     g_payload.humi_max = 0.0f;
     g_payload.flag2 = FLAG_OK;
-    #endif
+#endif
 
     nimble_port_init();
 
@@ -361,7 +549,9 @@ void app_main(void)
 
     nimble_port_freertos_init(host_task);
 
-    #if !MANUAL_MODE
+    xTaskCreate(history_stream_task, "hist_stream", 4096, NULL, 5, NULL);
+
+#if !MANUAL_MODE
     xTaskCreate(sensor_task, "sensor", 4096, NULL, 5, NULL);
-    #endif
+#endif
 }
