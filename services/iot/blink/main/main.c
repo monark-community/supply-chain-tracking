@@ -38,6 +38,11 @@
 #define FLAG_OK        0x0
 #define FLAG_TEMP_OOR  0x1
 #define FLAG_HUMI_OOR  0x2
+#define CTRL_CMD_STREAM_START     0x01
+#define CTRL_CMD_STREAM_STOP      0x02
+#define CTRL_CMD_HISTORY_CLEAR    0x03
+#define CTRL_CMD_SET_ACTIVE_BATCH 0x04
+#define CTRL_CMD_CLEAR_ACTIVE_BATCH 0x05
 
 #define MANUAL_MODE 0
 #define MAN_TEMP_MIN  15.0f
@@ -56,6 +61,8 @@ typedef struct __attribute__((packed)) {
     float humi_min;
     float humi_max;
     uint8_t flag2;
+    uint8_t has_batch;
+    uint32_t batch_id;
 } payload_t;
 
 typedef struct __attribute__((packed)) {
@@ -68,6 +75,8 @@ typedef struct __attribute__((packed)) {
 
 static payload_t g_payload;
 static bool g_initialized = false;
+static bool g_has_active_batch = false;
+static uint32_t g_active_batch_id = 0;
 
 static rec_t g_hist[HISTORY_MAX];
 static uint16_t g_hist_head = 0;
@@ -168,6 +177,38 @@ static void update_payload(float t, float h)
     g_payload.flag2 = flag;
     hist_push(t, h, flag);
 
+    xSemaphoreGive(g_lock);
+}
+
+static void set_active_batch(uint32_t batch_id)
+{
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    g_has_active_batch = true;
+    g_active_batch_id = batch_id;
+    g_payload.has_batch = 1;
+    g_payload.batch_id = batch_id;
+    g_payload.temp_min = 0.0f;
+    g_payload.temp_max = 0.0f;
+    g_payload.humi_min = 0.0f;
+    g_payload.humi_max = 0.0f;
+    g_payload.flag2 = FLAG_OK;
+    g_initialized = false;
+    xSemaphoreGive(g_lock);
+}
+
+static void clear_active_batch(void)
+{
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    g_has_active_batch = false;
+    g_active_batch_id = 0;
+    g_payload.has_batch = 0;
+    g_payload.batch_id = 0;
+    g_payload.temp_min = 0.0f;
+    g_payload.temp_max = 0.0f;
+    g_payload.humi_min = 0.0f;
+    g_payload.humi_max = 0.0f;
+    g_payload.flag2 = FLAG_OK;
+    g_initialized = false;
     xSemaphoreGive(g_lock);
 }
 
@@ -304,16 +345,34 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             if (len < 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             if (os_mbuf_copydata(ctxt->om, 0, 1, &cmd) != 0) return BLE_ATT_ERR_UNLIKELY;
 
-            if (cmd == 0x01) {
+            if (cmd == CTRL_CMD_STREAM_START) {
                 g_stream_req_start = true;
                 return 0;
             }
-            if (cmd == 0x02) {
+            if (cmd == CTRL_CMD_STREAM_STOP) {
                 g_stream_req_stop = true;
                 return 0;
             }
-            if (cmd == 0x03) {
+            if (cmd == CTRL_CMD_HISTORY_CLEAR) {
                 hist_clear();
+                return 0;
+            }
+            if (cmd == CTRL_CMD_SET_ACTIVE_BATCH) {
+                if (len < 5) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+                uint8_t raw[4] = {0};
+                if (os_mbuf_copydata(ctxt->om, 1, 4, raw) != 0) return BLE_ATT_ERR_UNLIKELY;
+                uint32_t batch_id = (uint32_t)raw[0]
+                                  | ((uint32_t)raw[1] << 8)
+                                  | ((uint32_t)raw[2] << 16)
+                                  | ((uint32_t)raw[3] << 24);
+                if (batch_id == 0) return BLE_ATT_ERR_UNLIKELY;
+                set_active_batch(batch_id);
+                ESP_LOGI(TAG, "Active batch set: %lu", (unsigned long)batch_id);
+                return 0;
+            }
+            if (cmd == CTRL_CMD_CLEAR_ACTIVE_BATCH) {
+                clear_active_batch();
+                ESP_LOGI(TAG, "Active batch cleared.");
                 return 0;
             }
             return BLE_ATT_ERR_UNLIKELY;
@@ -493,6 +552,15 @@ static void sensor_task(void *param)
     vTaskDelay(pdMS_TO_TICKS(DHT_STARTUP_DELAY_MS));
 
     while (1) {
+        bool has_batch = false;
+        xSemaphoreTake(g_lock, portMAX_DELAY);
+        has_batch = g_has_active_batch;
+        xSemaphoreGive(g_lock);
+        if (!has_batch) {
+            vTaskDelay(pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
+            continue;
+        }
+
         float t = NAN, h = NAN;
         esp_err_t err = ESP_FAIL;
         int last_level = gpio_get_level(DHT_GPIO);
@@ -546,6 +614,8 @@ void app_main(void)
     g_payload.humi_min = MAN_HUMI_MIN;
     g_payload.humi_max = MAN_HUMI_MAX;
     g_payload.flag2    = (uint8_t)MAN_FLAG;
+    g_payload.has_batch = 0;
+    g_payload.batch_id = 0;
     g_initialized = true;
     hist_push((MAN_TEMP_MIN + MAN_TEMP_MAX) * 0.5f, (MAN_HUMI_MIN + MAN_HUMI_MAX) * 0.5f, (uint8_t)MAN_FLAG);
     xSemaphoreGive(g_lock);
@@ -555,6 +625,8 @@ void app_main(void)
     g_payload.humi_min = 0.0f;
     g_payload.humi_max = 0.0f;
     g_payload.flag2 = FLAG_OK;
+    g_payload.has_batch = 0;
+    g_payload.batch_id = 0;
 #endif
 
     nimble_port_init();

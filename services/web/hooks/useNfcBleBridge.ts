@@ -20,12 +20,15 @@ type BluetoothRemoteGATTServerLike = {
 
 type BluetoothCharacteristicPropertiesLike = {
   read?: boolean;
+  write?: boolean;
+  writeWithoutResponse?: boolean;
 };
 
 type BluetoothRemoteGATTCharacteristicLike = {
   uuid: string;
   properties: BluetoothCharacteristicPropertiesLike;
   readValue: () => Promise<DataView>;
+  writeValue: (value: BufferSource) => Promise<void>;
 };
 
 type BluetoothRemoteGATTServiceLike = {
@@ -98,6 +101,8 @@ const nfcBleDeviceNamePrefix = process.env.NEXT_PUBLIC_NFC_BLE_DEVICE_NAME_PREFI
 const nfcBleLegacyServiceUuid = '0110efbe-edfe-0d1c-2b3a-4f5e6d7c8b9a';
 const nfcBlePayloadUuid = '9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1002';
 const nfcBleLegacyPayloadUuid = '0210efbe-edfe-0d1c-2b3a-4f5e6d7c8b9a';
+const nfcBleCtrlUuid = '9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1003';
+const nfcBleLegacyCtrlUuid = '0310efbe-edfe-0d1c-2b3a-4f5e6d7c8b9a';
 
 const isDomExceptionNamed = (error: unknown, name: string): boolean =>
   error instanceof DOMException && error.name === name;
@@ -141,6 +146,8 @@ type NfcPayloadSnapshot = {
   humiMin: number;
   humiMax: number;
   flag2: number;
+  hasBatchId: boolean;
+  batchId: number | null;
   byteLength: number;
 };
 
@@ -282,12 +289,62 @@ export function useNfcBleBridge() {
     }
   };
 
-  const readNfcPayloadSnapshot = async () => {
+  const getConnectedService = async () => {
+    const device = connectedDevice;
+    if (!device?.gatt?.connected) {
+      throw new Error('BLE link is not active. Reconnect and try again.');
+    }
+    const serviceCandidates = getServiceCandidates();
+    const services = await device.gatt.getPrimaryServices();
+    const service = services.find((candidate) => serviceCandidates.includes(candidate.uuid.toLowerCase()));
+    if (!service) {
+      throw new Error('Connected device no longer exposes the configured BLE service.');
+    }
+    return service;
+  };
+
+  const getControlCharacteristic = async () => {
+    const service = await getConnectedService();
+    const controlCandidates = [nfcBleCtrlUuid, nfcBleLegacyCtrlUuid];
+    const controlCandidateSet = new Set(controlCandidates.map(normalizeUuid));
+    const characteristics = await service.getCharacteristics();
+    const characteristic =
+      characteristics.find((candidate) => controlCandidateSet.has(normalizeUuid(candidate.uuid))) ?? null;
+    if (!characteristic || !(characteristic.properties.write || characteristic.properties.writeWithoutResponse)) {
+      throw new Error('Control characteristic is not writable on the connected device.');
+    }
+    return characteristic;
+  };
+
+  const writeControlCommand = async (bytes: BufferSource) => {
+    const characteristic = await getControlCharacteristic();
+    await characteristic.writeValue(bytes);
+  };
+
+  const setActiveBatchOnHardware = async (batchId: number) => {
+    const normalized = Math.floor(batchId);
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+      throw new Error('Batch id must be a positive integer.');
+    }
+    const payload = new Uint8Array(5);
+    payload[0] = 0x04;
+    payload[1] = normalized & 0xff;
+    payload[2] = (normalized >>> 8) & 0xff;
+    payload[3] = (normalized >>> 16) & 0xff;
+    payload[4] = (normalized >>> 24) & 0xff;
+    await writeControlCommand(payload);
+  };
+
+  const clearActiveBatchOnHardware = async () => {
+    await writeControlCommand(new Uint8Array([0x05]));
+  };
+
+  const readNfcPayloadSnapshot = async (): Promise<NfcPayloadSnapshot | null> => {
     if (!isNfcConnected) {
       setNfcReadError('Connect a BLE device before reading payload data.');
       setLastBleErrorName('ReadPreconditionError');
       setLastBleErrorMessage('No connected BLE device when attempting payload read.');
-      return;
+      return null;
     }
 
     const device = connectedDevice;
@@ -295,7 +352,7 @@ export function useNfcBleBridge() {
       setNfcReadError('BLE link is not active. Reconnect and try again.');
       setLastBleErrorName('ReadPreconditionError');
       setLastBleErrorMessage('Connected device did not have an active GATT connection.');
-      return;
+      return null;
     }
 
     setIsReadingNfc(true);
@@ -333,24 +390,39 @@ export function useNfcBleBridge() {
         throw new Error(`Payload size ${value.byteLength} bytes is smaller than expected 17 bytes.`);
       }
 
-      setNfcPayloadSnapshot({
+      const hasBatchId = value.byteLength >= 22 ? value.getUint8(17) === 1 : false;
+      const batchId = value.byteLength >= 22 ? value.getUint32(18, true) : null;
+      const snapshot = {
         tempMin: value.getFloat32(0, true),
         tempMax: value.getFloat32(4, true),
         humiMin: value.getFloat32(8, true),
         humiMax: value.getFloat32(12, true),
         flag2: value.getUint8(16),
+        hasBatchId,
+        batchId: hasBatchId ? batchId : null,
         byteLength: value.byteLength,
-      });
+      };
+      setNfcPayloadSnapshot(snapshot);
       setLastSuccessfulBlePhase('readValue');
+      return snapshot;
     } catch (error) {
       const details = getErrorDetails(error);
       setLastBleErrorName(details.name);
       setLastBleErrorMessage(details.message);
       setNfcReadError(toFriendlyReadError(error));
+      return null;
     } finally {
       setIsReadingNfc(false);
       setBlePhase(isNfcConnected ? 'connected' : 'idle');
     }
+  };
+
+  const readActiveBatchIdFromHardware = async (): Promise<number | null> => {
+    const snapshot = await readNfcPayloadSnapshot();
+    if (snapshot && snapshot.hasBatchId && snapshot.batchId) {
+      return snapshot.batchId;
+    }
+    return null;
   };
 
   const readNfcCharacteristic = async () => {
@@ -435,6 +507,9 @@ export function useNfcBleBridge() {
     setSelectedNfcCharacteristicId,
     connectNfcDevice,
     readNfcPayloadSnapshot,
+    setActiveBatchOnHardware,
+    clearActiveBatchOnHardware,
+    readActiveBatchIdFromHardware,
     readNfcCharacteristic,
     disconnectNfcDevice,
   };

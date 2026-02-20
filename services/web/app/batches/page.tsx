@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { Nav } from '@/components/nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,8 +16,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, Plus, Search, Clock, Package } from 'lucide-react';
-import { harvestProducerBatch } from '@/lib/chainproof-write';
+import { MapPin, Search, Clock, Package } from 'lucide-react';
 import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
 
@@ -58,16 +56,6 @@ type BatchDetails = {
   parents: number[];
   children: number[];
   timeline: BatchTimelineEvent[];
-};
-
-type HarvestFeedback = {
-  type: 'success' | 'error';
-  message: string;
-  txHash?: string;
-  newBatchId?: number | null;
-  chainId?: number;
-  contractAddress?: string;
-  ipfsHash?: string;
 };
 
 type TrackFeedback = {
@@ -110,31 +98,17 @@ function getStatusLabel(status: number) {
 }
 
 export default function BatchesPage() {
-  const searchParams = useSearchParams();
-  const { role, account } = useWalletAuth();
-  const isProducer = role === 'producer';
+  const { account } = useWalletAuth();
   const storageKey = useMemo(() => getStorageKey(account), [account]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [hasHydratedStorage, setHasHydratedStorage] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [origin, setOrigin] = useState('');
-  const [quantityInput, setQuantityInput] = useState('');
-  const [trackingCode, setTrackingCode] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState<HarvestFeedback | null>(null);
   const [trackDialogOpen, setTrackDialogOpen] = useState(false);
   const [trackLookup, setTrackLookup] = useState('');
   const [trackingSubmitting, setTrackingSubmitting] = useState(false);
   const [trackFeedback, setTrackFeedback] = useState<TrackFeedback | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<BatchItem | null>(null);
-
-  useEffect(() => {
-    if (isProducer && searchParams.get('action') === 'harvest') {
-      setDialogOpen(true);
-    }
-  }, [searchParams, isProducer]);
 
   useEffect(() => {
     setHasHydratedStorage(false);
@@ -163,88 +137,6 @@ export default function BatchesPage() {
     if (!storageKey || !hasHydratedStorage) return;
     window.localStorage.setItem(storageKey, JSON.stringify(batches));
   }, [batches, storageKey, hasHydratedStorage]);
-
-  const resetForm = () => {
-    setOrigin('');
-    setQuantityInput('');
-    setTrackingCode('');
-  };
-
-  const handleCreateBatch = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setFeedback(null);
-
-    try {
-      const quantity = Number(quantityInput);
-      const result = await harvestProducerBatch({
-        origin,
-        quantity,
-        trackingCode,
-      });
-
-      setBatches((current) => [
-        {
-          id: result.newBatchId ? String(result.newBatchId) : `new-${Date.now()}`,
-          batchNumber: trackingCode.trim(),
-          product: origin.trim(),
-          quantity,
-          currentQuantity: quantity,
-          status: 'created',
-          currentLocation: 'On-chain harvest',
-          currentCustodian: shortenAddress(result.account),
-          lastUpdate: 'just now',
-          traces: 1,
-          details: result.newBatchId
-            ? {
-                chainId: result.chainId,
-                contractAddress: result.contractAddress,
-                creator: result.account,
-                origin: origin.trim(),
-                ipfsHash: result.ipfsHash,
-                quantity,
-                trackingCode: trackingCode.trim(),
-                status: 0,
-                createdAt: Math.floor(Date.now() / 1000),
-                updatedAt: Math.floor(Date.now() / 1000),
-                currentHandler: result.account,
-                parents: [],
-                children: [],
-                timeline: [
-                  {
-                    type: 'HARVEST',
-                    text: `Harvested by ${result.account}`,
-                    timestamp: Math.floor(Date.now() / 1000),
-                    txHash: result.txHash,
-                  },
-                ],
-              }
-            : undefined,
-        },
-        ...current,
-      ]);
-
-      setFeedback({
-        type: 'success',
-        message: 'Batch harvested on-chain successfully.',
-        txHash: result.txHash,
-        newBatchId: result.newBatchId,
-        chainId: result.chainId,
-        contractAddress: result.contractAddress,
-        ipfsHash: result.ipfsHash,
-      });
-      resetForm();
-      setDialogOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to create batch.';
-      setFeedback({
-        type: 'error',
-        message,
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const handleTrackBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -339,67 +231,6 @@ export default function BatchesPage() {
             <p className="mt-2 text-gray-600">Current batches you are tracking</p>
           </div>
           <div className="flex items-center gap-2">
-            {isProducer && (
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create Batch
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <form onSubmit={handleCreateBatch}>
-                    <DialogHeader>
-                      <DialogTitle>Create Product Batch</DialogTitle>
-                      <DialogDescription>
-                        Submit a Producer harvest transaction. Temporary IPFS hash will be generated automatically.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="origin">Origin / Product Label</Label>
-                        <Input
-                          id="origin"
-                          value={origin}
-                          onChange={(e) => setOrigin(e.target.value)}
-                          placeholder="e.g., Ethiopia - Yirgacheffe"
-                          disabled={submitting}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="tracking-code">Tracking Code</Label>
-                        <Input
-                          id="tracking-code"
-                          value={trackingCode}
-                          onChange={(e) => setTrackingCode(e.target.value)}
-                          placeholder="e.g., BATCH-2026-001"
-                          disabled={submitting}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="quantity">Quantity</Label>
-                        <Input
-                          id="quantity"
-                          type="number"
-                          value={quantityInput}
-                          onChange={(e) => setQuantityInput(e.target.value)}
-                          placeholder="e.g., 5000"
-                          min={1}
-                          disabled={submitting}
-                        />
-                      </div>
-                    </div>
-                    {feedback?.type === 'error' && <p className="pb-3 text-sm text-red-600">{feedback.message}</p>}
-                    <DialogFooter>
-                      <Button type="submit" disabled={submitting}>
-                        {submitting ? 'Submitting transaction...' : 'Create Batch'}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
-            )}
-
             <Dialog open={trackDialogOpen} onOpenChange={setTrackDialogOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline">
@@ -511,19 +342,6 @@ export default function BatchesPage() {
             )}
           </DialogContent>
         </Dialog>
-
-        {feedback?.type === 'success' && (
-          <Card className="mb-6 border-green-200 bg-green-50">
-            <CardContent className="space-y-1 pt-6 text-sm text-green-900">
-              <p className="font-medium">{feedback.message}</p>
-              <p>Batch ID: {feedback.newBatchId ?? 'Pending event parse'}</p>
-              <p>Chain: {feedback.chainId}</p>
-              <p>Contract: {feedback.contractAddress}</p>
-              <p className="break-all">Tx Hash: {feedback.txHash}</p>
-              <p className="break-all">Temp IPFS: {feedback.ipfsHash}</p>
-            </CardContent>
-          </Card>
-        )}
 
         <div className="mb-6">
           <div className="relative">

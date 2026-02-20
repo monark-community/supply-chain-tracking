@@ -3,12 +3,13 @@
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Package, TrendingUp, MapPin, Activity, ArrowRightLeft, QrCode } from 'lucide-react';
+import { Package, TrendingUp, MapPin, Activity, ArrowRightLeft, QrCode, Bluetooth } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { initiateBatchTransfer } from '@/lib/chainproof-write';
+import { initiateBatchTransferById } from '@/lib/chainproof-write';
+import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
 
 type TxFeedback = {
   type: 'success' | 'error';
@@ -17,10 +18,13 @@ type TxFeedback = {
 };
 
 export function ProducerDashboard() {
-  const [transferLookup, setTransferLookup] = useState('');
   const [transferRecipient, setTransferRecipient] = useState('');
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [loadingHardwareBatch, setLoadingHardwareBatch] = useState(false);
+  const { isNfcConnected, isConnecting, nfcDeviceName, connectionError, connectNfcDevice, readActiveBatchIdFromHardware } =
+    useNfcBleBridge();
 
   const stats = [
     { name: 'Batches Created', value: '12', icon: Package, change: '+2 this week' },
@@ -40,8 +44,21 @@ export function ProducerDashboard() {
     setTransferSubmitting(true);
     setTransferFeedback(null);
     try {
-      const result = await initiateBatchTransfer({
-        lookup: transferLookup,
+      let batchId = activeBatchId;
+      if (!batchId) {
+        setLoadingHardwareBatch(true);
+        try {
+          batchId = await readActiveBatchIdFromHardware();
+        } finally {
+          setLoadingHardwareBatch(false);
+        }
+      }
+      if (!batchId) {
+        throw new Error('No active batch id was found on connected hardware.');
+      }
+      setActiveBatchId(batchId);
+      const result = await initiateBatchTransferById({
+        batchId,
         to: transferRecipient,
       });
       setTransferFeedback({
@@ -49,7 +66,6 @@ export function ProducerDashboard() {
         message: `Transfer initiated for batch ${result.batchId}.`,
         txHash: result.txHash,
       });
-      setTransferLookup('');
       setTransferRecipient('');
     } catch (error) {
       setTransferFeedback({
@@ -117,15 +133,25 @@ export function ProducerDashboard() {
 
           <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
             <h4 className="font-semibold text-gray-900">Initiate Transfer</h4>
-            <div className="space-y-2">
-              <Label htmlFor="producer-transfer-lookup">Batch ID or tracking code</Label>
-              <Input
-                id="producer-transfer-lookup"
-                value={transferLookup}
-                onChange={(event) => setTransferLookup(event.target.value)}
-                placeholder="e.g., 12 or BATCH-2026-001"
-                disabled={transferSubmitting}
-              />
+            <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700">
+              <p className="font-semibold text-slate-900">Hardware required</p>
+              <p className="mt-1">{isNfcConnected ? `Connected: ${nfcDeviceName || 'ESP32 device'}` : 'Not connected'}</p>
+              <p className="mt-1">Active batch ID: {activeBatchId ?? 'Not loaded'}</p>
+              {connectionError ? <p className="mt-1 text-red-600">{connectionError}</p> : null}
+              <div className="mt-2 flex gap-2">
+                <Button type="button" variant="outline" onClick={() => void connectNfcDevice()} disabled={isNfcConnected || isConnecting}>
+                  <Bluetooth className="mr-2 h-4 w-4" />
+                  {isConnecting ? 'Connecting...' : isNfcConnected ? 'Connected' : 'Connect'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void readActiveBatchIdFromHardware().then((id) => setActiveBatchId(id))}
+                  disabled={!isNfcConnected || loadingHardwareBatch || transferSubmitting}
+                >
+                  {loadingHardwareBatch ? 'Reading...' : 'Load Batch From Hardware'}
+                </Button>
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="producer-transfer-recipient">Recipient wallet</Label>
@@ -143,7 +169,7 @@ export function ProducerDashboard() {
                 {transferFeedback.txHash ? ` tx: ${transferFeedback.txHash}` : ''}
               </p>
             )}
-            <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+            <Button className="w-full" disabled={transferSubmitting || !isNfcConnected || !activeBatchId || !transferRecipient.trim()}>
               <ArrowRightLeft className="mr-2 h-4 w-4" />
               {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
             </Button>

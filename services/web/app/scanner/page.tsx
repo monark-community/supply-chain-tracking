@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 import { Nav } from '@/components/nav';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
@@ -11,11 +10,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ArrowRightLeft, Bluetooth, CheckCircle, Package, Search, Waves } from 'lucide-react';
-import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
-import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
+import { harvestProducerBatch, initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
+import { readBatchByTrackingOrId, readPredictedNextBatchId } from '@/lib/chainproof-read';
 import type { AppRole } from '@/lib/wallet-auth';
 
 type TxFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
+};
+
+type HarvestFeedback = {
   type: 'success' | 'error';
   message: string;
   txHash?: string;
@@ -38,17 +43,25 @@ export default function ScannerPage() {
     lastBleErrorMessage,
     connectNfcDevice,
     readNfcPayloadSnapshot,
+    readActiveBatchIdFromHardware,
+    setActiveBatchOnHardware,
+    clearActiveBatchOnHardware,
     disconnectNfcDevice,
   } = useNfcBleBridge();
 
-  const [transferLookup, setTransferLookup] = useState('');
+  const [origin, setOrigin] = useState('');
+  const [trackingCode, setTrackingCode] = useState('');
+  const [quantityInput, setQuantityInput] = useState('');
+  const [harvestSubmitting, setHarvestSubmitting] = useState(false);
+  const [harvestFeedback, setHarvestFeedback] = useState<HarvestFeedback | null>(null);
+
   const [transferRecipient, setTransferRecipient] = useState('');
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
 
-  const [receiveLookup, setReceiveLookup] = useState('');
   const [receiveSubmitting, setReceiveSubmitting] = useState(false);
   const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
 
   const [verifyLookup, setVerifyLookup] = useState('');
   const [verifySubmitting, setVerifySubmitting] = useState(false);
@@ -56,14 +69,76 @@ export default function ScannerPage() {
 
   const activeRole: AppRole = isConnected ? role : 'none';
 
+  const handleCreateBatch = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setHarvestSubmitting(true);
+    setHarvestFeedback(null);
+
+    if (!isNfcConnected) {
+      setHarvestFeedback({
+        type: 'error',
+        message: 'Connect an NFC device before creating a batch.',
+      });
+      setHarvestSubmitting(false);
+      return;
+    }
+
+    let stagedBatchId: number | null = null;
+    let wroteHardware = false;
+
+    try {
+      const quantity = Number(quantityInput);
+      stagedBatchId = await readPredictedNextBatchId();
+      await setActiveBatchOnHardware(stagedBatchId);
+      wroteHardware = true;
+
+      const result = await harvestProducerBatch({
+        origin,
+        quantity,
+        trackingCode,
+      });
+
+      setHarvestFeedback({
+        type: 'success',
+        message: `Batch ${result.newBatchId ?? 'pending'} harvested on-chain successfully.`,
+        txHash: result.txHash,
+      });
+      setOrigin('');
+      setTrackingCode('');
+      setQuantityInput('');
+      setActiveBatchId(result.newBatchId ?? stagedBatchId);
+    } catch (error) {
+      if (wroteHardware) {
+        try {
+          await clearActiveBatchOnHardware();
+        } catch {
+          // Best-effort rollback if on-chain creation fails after hardware staging.
+        }
+      }
+      const message = error instanceof Error ? error.message : 'Failed to create batch.';
+      setHarvestFeedback({
+        type: 'error',
+        message: stagedBatchId ? `${message} Hardware rollback was attempted.` : message,
+      });
+    } finally {
+      setHarvestSubmitting(false);
+    }
+  };
+
   const handleTransfer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setTransferSubmitting(true);
     setTransferFeedback(null);
 
     try {
-      const result = await initiateBatchTransfer({
-        lookup: transferLookup,
+      let batchId = activeBatchId;
+      if (!batchId) {
+        batchId = await readActiveBatchIdFromHardware();
+      }
+      if (!batchId) throw new Error('No active batch id found on connected hardware.');
+      setActiveBatchId(batchId);
+      const result = await initiateBatchTransferById({
+        batchId,
         to: transferRecipient,
       });
       setTransferFeedback({
@@ -71,7 +146,6 @@ export default function ScannerPage() {
         message: `Transfer initiated for batch ${result.batchId}.`,
         txHash: result.txHash,
       });
-      setTransferLookup('');
       setTransferRecipient('');
     } catch (err) {
       setTransferFeedback({
@@ -89,15 +163,18 @@ export default function ScannerPage() {
     setReceiveFeedback(null);
 
     try {
-      const result = await receiveTransferredBatch({
-        lookup: receiveLookup,
-      });
+      let batchId = activeBatchId;
+      if (!batchId) {
+        batchId = await readActiveBatchIdFromHardware();
+      }
+      if (!batchId) throw new Error('No active batch id found on connected hardware.');
+      setActiveBatchId(batchId);
+      const result = await receiveTransferredBatchById({ batchId });
       setReceiveFeedback({
         type: 'success',
         message: `Batch ${result.batchId} received successfully.`,
         txHash: result.txHash,
       });
-      setReceiveLookup('');
     } catch (err) {
       setReceiveFeedback({
         type: 'error',
@@ -142,16 +219,7 @@ export default function ScannerPage() {
   const renderTransferForm = (prefix: string, title = 'Initiate Transfer') => (
     <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
       <h4 className="font-semibold text-gray-900">{title}</h4>
-      <div className="space-y-2">
-        <Label htmlFor={`${prefix}-transfer-lookup`}>Batch ID or tracking code</Label>
-        <Input
-          id={`${prefix}-transfer-lookup`}
-          value={transferLookup}
-          onChange={(event) => setTransferLookup(event.target.value)}
-          placeholder="e.g., 12 or BATCH-2026-001"
-          disabled={transferSubmitting}
-        />
-      </div>
+      <p className="text-xs text-slate-600">Active hardware batch ID: {activeBatchId ?? 'Not loaded'}</p>
       <div className="space-y-2">
         <Label htmlFor={`${prefix}-transfer-recipient`}>Recipient wallet</Label>
         <Input
@@ -163,7 +231,7 @@ export default function ScannerPage() {
         />
       </div>
       {renderTxFeedback(transferFeedback)}
-      <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+      <Button className="w-full" disabled={transferSubmitting || !isNfcConnected || !activeBatchId || !transferRecipient.trim()}>
         <ArrowRightLeft className="mr-2 h-4 w-4" />
         {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
       </Button>
@@ -173,18 +241,9 @@ export default function ScannerPage() {
   const renderReceiveForm = (prefix: string, title = 'Receive Batch') => (
     <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
       <h4 className="font-semibold text-gray-900">{title}</h4>
-      <div className="space-y-2">
-        <Label htmlFor={`${prefix}-receive-lookup`}>Batch ID or tracking code</Label>
-        <Input
-          id={`${prefix}-receive-lookup`}
-          value={receiveLookup}
-          onChange={(event) => setReceiveLookup(event.target.value)}
-          placeholder="e.g., 12 or BATCH-2026-001"
-          disabled={receiveSubmitting}
-        />
-      </div>
+      <p className="text-xs text-slate-600">Active hardware batch ID: {activeBatchId ?? 'Not loaded'}</p>
       {renderTxFeedback(receiveFeedback)}
-      <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+      <Button className="w-full" disabled={receiveSubmitting || !isNfcConnected || !activeBatchId}>
         <Package className="mr-2 h-4 w-4" />
         {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
       </Button>
@@ -203,14 +262,52 @@ export default function ScannerPage() {
     if (activeRole === 'producer') {
       return (
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Link href="/batches?action=harvest">
-              <Button className="w-full">Create New Batch</Button>
-            </Link>
-            <Button variant="outline" className="w-full" disabled>
-              Log Event (next)
+          <form onSubmit={handleCreateBatch} className="space-y-3 rounded-lg border bg-white p-4">
+            <h4 className="font-semibold text-gray-900">Create New Batch</h4>
+            <p className="text-xs text-slate-600">Batch creation is available in NFC Console only.</p>
+            <div className="space-y-2">
+              <Label htmlFor="producer-origin">Origin / Product Label</Label>
+              <Input
+                id="producer-origin"
+                value={origin}
+                onChange={(event) => setOrigin(event.target.value)}
+                placeholder="e.g., Ethiopia - Yirgacheffe"
+                disabled={harvestSubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="producer-tracking-code">Tracking Code</Label>
+              <Input
+                id="producer-tracking-code"
+                value={trackingCode}
+                onChange={(event) => setTrackingCode(event.target.value)}
+                placeholder="e.g., BATCH-2026-001"
+                disabled={harvestSubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="producer-quantity">Quantity</Label>
+              <Input
+                id="producer-quantity"
+                type="number"
+                value={quantityInput}
+                onChange={(event) => setQuantityInput(event.target.value)}
+                placeholder="e.g., 5000"
+                min={1}
+                disabled={harvestSubmitting}
+              />
+            </div>
+            {harvestFeedback ? (
+              <p className={`text-sm ${harvestFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                {harvestFeedback.message}
+                {harvestFeedback.txHash ? ` tx: ${harvestFeedback.txHash}` : ''}
+              </p>
+            ) : null}
+            <Button className="w-full" disabled={harvestSubmitting || !isNfcConnected}>
+              <Package className="mr-2 h-4 w-4" />
+              {harvestSubmitting ? 'Submitting...' : 'Create Batch'}
             </Button>
-          </div>
+          </form>
           {renderTransferForm('producer')}
         </div>
       );
@@ -298,6 +395,13 @@ export default function ScannerPage() {
                 <Waves className="mr-2 h-4 w-4" />
                 {isReadingNfc ? 'Reading...' : 'Read Payload Snapshot'}
               </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void readActiveBatchIdFromHardware().then((id) => setActiveBatchId(id))}
+                disabled={!isNfcConnected || isReadingNfc}
+              >
+                Load Batch ID
+              </Button>
               <Button variant="outline" onClick={disconnectNfcDevice} disabled={!isNfcConnected}>
                 Disconnect
               </Button>
@@ -319,6 +423,7 @@ export default function ScannerPage() {
                 <p className="mt-1">Temp range: {nfcPayloadSnapshot.tempMin.toFixed(2)} to {nfcPayloadSnapshot.tempMax.toFixed(2)} C</p>
                 <p>Humidity range: {nfcPayloadSnapshot.humiMin.toFixed(2)} to {nfcPayloadSnapshot.humiMax.toFixed(2)} %</p>
                 <p>Flag: {nfcPayloadSnapshot.flag2}</p>
+                <p>Batch ID: {nfcPayloadSnapshot.hasBatchId ? nfcPayloadSnapshot.batchId : 'Not set'}</p>
                 <p>Payload bytes: {nfcPayloadSnapshot.byteLength}</p>
               </div>
             ) : null}
@@ -340,7 +445,7 @@ export default function ScannerPage() {
               Role Action
             </CardTitle>
             <CardDescription>
-              Actions are always visible during testing. Later we can gate this section behind NFC device connection.
+              Batch creation and role actions run from NFC Console for the current BLE workflow.
             </CardDescription>
           </CardHeader>
           <CardContent>{renderRoleActions()}</CardContent>
