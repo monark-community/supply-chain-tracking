@@ -1,13 +1,28 @@
 'use client';
 
+import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Package, TrendingUp, MapPin, Activity, QrCode, Search } from 'lucide-react';
+import { Package, TrendingUp, MapPin, Activity, QrCode, Search, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { initiateBatchTransfer } from '@/lib/chainproof-write';
+
+type TxFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
+};
 
 export function ProducerDashboard() {
+  const [transferLookup, setTransferLookup] = useState('');
+  const [transferRecipient, setTransferRecipient] = useState('');
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+  const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
+
   const stats = [
     { name: 'Products Registered', value: '12', icon: Package, change: '+2 this week' },
     { name: 'Active Batches', value: '8', icon: MapPin, change: '3 in production' },
@@ -26,6 +41,32 @@ export function ProducerDashboard() {
     { name: 'Premium Tea Leaves', sku: 'TEA-002', category: 'Agricultural', batches: 3 },
     { name: 'Fair Trade Cocoa', sku: 'COCOA-003', category: 'Agricultural', batches: 4 },
   ];
+
+  const handleTransfer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTransferSubmitting(true);
+    setTransferFeedback(null);
+    try {
+      const result = await initiateBatchTransfer({
+        lookup: transferLookup,
+        to: transferRecipient,
+      });
+      setTransferFeedback({
+        type: 'success',
+        message: `Transfer initiated for batch ${result.batchId}.`,
+        txHash: result.txHash,
+      });
+      setTransferLookup('');
+      setTransferRecipient('');
+    } catch (error) {
+      setTransferFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Transfer initiation failed.',
+      });
+    } finally {
+      setTransferSubmitting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -120,7 +161,7 @@ export function ProducerDashboard() {
                 <Link href="/scanner">
                   <Button variant="outline" className="w-full">
                     <QrCode className="mr-2 h-4 w-4" />
-                    Transfer Batch
+                    Scan / Inspect
                   </Button>
                 </Link>
                 <Button variant="outline" className="w-full">
@@ -128,6 +169,40 @@ export function ProducerDashboard() {
                   Log Event
                 </Button>
               </div>
+
+              <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
+                <h4 className="font-semibold text-gray-900">Initiate Transfer</h4>
+                <div className="space-y-2">
+                  <Label htmlFor="producer-transfer-lookup">Batch ID or tracking code</Label>
+                  <Input
+                    id="producer-transfer-lookup"
+                    value={transferLookup}
+                    onChange={(event) => setTransferLookup(event.target.value)}
+                    placeholder="e.g., 12 or BATCH-2026-001"
+                    disabled={transferSubmitting}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="producer-transfer-recipient">Recipient wallet</Label>
+                  <Input
+                    id="producer-transfer-recipient"
+                    value={transferRecipient}
+                    onChange={(event) => setTransferRecipient(event.target.value)}
+                    placeholder="0x..."
+                    disabled={transferSubmitting}
+                  />
+                </div>
+                {transferFeedback && (
+                  <p className={`text-sm ${transferFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                    {transferFeedback.message}
+                    {transferFeedback.txHash ? ` tx: ${transferFeedback.txHash}` : ''}
+                  </p>
+                )}
+                <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+                  <ArrowRightLeft className="mr-2 h-4 w-4" />
+                  {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
+                </Button>
+              </form>
 
               <div className="space-y-3">
                 <h4 className="text-sm font-medium text-gray-700">Recent Batches</h4>
@@ -168,7 +243,7 @@ export function ProducerDashboard() {
               <ul className="space-y-1.5 text-sm text-gray-700">
                 <li>• Create products with SKU and details</li>
                 <li>• Create production batches</li>
-                <li>• Transfer batch to start shipment</li>
+                <li>• Initiate transfers to transporter, warehouse, or processor</li>
                 <li>• Log batch events (production, packaging)</li>
                 <li>• View batch journey and traceability</li>
               </ul>

@@ -1,6 +1,7 @@
 'use client';
 
 import { Contract } from 'ethers';
+import { isAddress } from 'ethers';
 import type { JsonRpcProvider, Wallet } from 'ethers';
 import { restoreManualWalletSession } from './manual-wallet';
 
@@ -31,6 +32,32 @@ export type HarvestProducerBatchResult = {
   ipfsHash: string;
 };
 
+export type InitiateBatchTransferInput = {
+  lookup: string;
+  to: string;
+};
+
+export type InitiateBatchTransferResult = {
+  chainId: number;
+  contractAddress: string;
+  txHash: string;
+  account: string;
+  batchId: number;
+  to: string;
+};
+
+export type ReceiveTransferredBatchInput = {
+  lookup: string;
+};
+
+export type ReceiveTransferredBatchResult = {
+  chainId: number;
+  contractAddress: string;
+  txHash: string;
+  account: string;
+  batchId: number;
+};
+
 type ChainproofWriteContext = {
   provider: JsonRpcProvider;
   wallet: Wallet;
@@ -42,8 +69,13 @@ type ChainproofWriteContext = {
 
 const CHAINPROOF_WRITE_ABI = [
   'function roles(address) view returns (uint8)',
+  'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
   'function harvestBatch(string origin, string ipfsHash, uint256 quantity, string trackingCode) returns (uint256 newBatchId)',
+  'function initiateTransfer(uint256 batchId, address to)',
+  'function receiveBatch(uint256 batchId)',
   'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
+  'event BatchTransferInitiated(uint256 indexed id, address indexed from, address indexed to, uint256 timestamp)',
+  'event BatchReceived(uint256 indexed id, address indexed receiver, uint256 timestamp)',
 ] as const;
 
 const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAINPROOF_CHAIN_ID || '1337');
@@ -69,7 +101,12 @@ function makeTempIpfsHash(trackingCode: string) {
   return `temp://harvest/${normalized}/${Date.now()}`;
 }
 
-function mapWriteError(error: unknown): Error {
+function mapWriteError(
+  error: unknown,
+  options?: {
+    roleNotAllowedMessage?: string;
+  }
+): Error {
   const message = error instanceof Error ? error.message : 'Transaction failed.';
   const lowered = message.toLowerCase();
 
@@ -77,7 +114,7 @@ function mapWriteError(error: unknown): Error {
     return new Error('Transaction was rejected.');
   }
   if (lowered.includes('role not allowed')) {
-    return new Error('Connected wallet is not assigned the Producer role.');
+    return new Error(options?.roleNotAllowedMessage || 'Connected wallet role is not allowed for this action.');
   }
   if (lowered.includes('tracking code already used')) {
     return new Error('Tracking code is already used. Choose a unique code.');
@@ -88,7 +125,51 @@ function mapWriteError(error: unknown): Error {
   if (lowered.includes('insufficient funds')) {
     return new Error('Wallet has insufficient funds for gas.');
   }
+  if (lowered.includes('batch does not exist') || lowered.includes('batch not found')) {
+    return new Error('Batch not found.');
+  }
+  if (lowered.includes('invalid recipient')) {
+    return new Error('Recipient wallet address is invalid.');
+  }
+  if (lowered.includes('recipient has no role')) {
+    return new Error('Recipient has no assigned role on-chain.');
+  }
+  if (lowered.includes('cannot transfer to self')) {
+    return new Error('Cannot transfer a batch to the same wallet.');
+  }
+  if (lowered.includes('sender role cannot transfer')) {
+    return new Error('Current wallet role cannot initiate transfers.');
+  }
+  if (lowered.includes('invalid transfer route')) {
+    return new Error('Transfer route is not allowed for sender and recipient roles.');
+  }
+  if (lowered.includes('only current handler can perform this action')) {
+    return new Error('Only the current handler can transfer this batch.');
+  }
+  if (lowered.includes('no pending transfer for receiver')) {
+    return new Error('No pending transfer exists for this batch and wallet.');
+  }
   return new Error(message);
+}
+
+async function resolveBatchIdFromLookup(context: ChainproofWriteContext, lookup: string): Promise<number> {
+  const trimmed = lookup.trim();
+  if (!trimmed) {
+    throw new Error('Enter a batch id or tracking code.');
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const batchId = Number(trimmed);
+    if (Number.isFinite(batchId) && batchId > 0) {
+      return batchId;
+    }
+  }
+
+  const batchId = Number(await context.contract.getBatchIdByTrackingCode(trimmed));
+  if (!batchId) {
+    throw new Error('Batch not found.');
+  }
+  return batchId;
 }
 
 async function createChainproofWriteContext(
@@ -170,6 +251,54 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
       newBatchId,
       account: context.account,
       ipfsHash,
+    };
+  } catch (error) {
+    throw mapWriteError(error, { roleNotAllowedMessage: 'Connected wallet is not assigned the Producer role.' });
+  }
+}
+
+export async function initiateBatchTransfer(
+  input: InitiateBatchTransferInput
+): Promise<InitiateBatchTransferResult> {
+  const recipient = input.to.trim();
+  if (!isAddress(recipient)) {
+    throw new Error('Recipient wallet address is invalid.');
+  }
+
+  try {
+    const context = await createChainproofWriteContext();
+    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
+    const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
+    await tx.wait();
+
+    return {
+      chainId: context.chainId,
+      contractAddress: context.contractAddress,
+      txHash: String(tx.hash),
+      account: context.account,
+      batchId,
+      to: recipient,
+    };
+  } catch (error) {
+    throw mapWriteError(error);
+  }
+}
+
+export async function receiveTransferredBatch(
+  input: ReceiveTransferredBatchInput
+): Promise<ReceiveTransferredBatchResult> {
+  try {
+    const context = await createChainproofWriteContext();
+    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
+    const tx = await context.contract.receiveBatch(BigInt(batchId));
+    await tx.wait();
+
+    return {
+      chainId: context.chainId,
+      contractAddress: context.contractAddress,
+      txHash: String(tx.hash),
+      account: context.account,
+      batchId,
     };
   } catch (error) {
     throw mapWriteError(error);
