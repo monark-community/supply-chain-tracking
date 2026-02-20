@@ -1,17 +1,54 @@
 'use client';
 
-import Link from 'next/link';
+import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { QrCode, Package, Shield, Search, Eye } from 'lucide-react';
+import { Package, Shield, Search, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
+import { receiveTransferredBatch } from '@/lib/chainproof-write';
+
+type TxFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
+};
 
 export function CustomerDashboard() {
+  const [receiveLookup, setReceiveLookup] = useState('');
+  const [receiveSubmitting, setReceiveSubmitting] = useState(false);
+  const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+
   const recentVerifications = [
     { product: 'Organic Coffee Beans', batch: 'BATCH-A1B2C3', verified: true, time: '5 min ago', origin: 'Green Valley Farms' },
     { product: 'Fair Trade Cocoa', batch: 'BATCH-D4E5F6', verified: true, time: '1 hour ago', origin: 'Ethical Cocoa Co.' },
     { product: 'Premium Tea Leaves', batch: 'BATCH-G7H8I9', verified: true, time: '3 hours ago', origin: 'Mountain Tea Estates' },
   ];
+
+  const handleReceive = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setReceiveSubmitting(true);
+    setReceiveFeedback(null);
+    try {
+      const result = await receiveTransferredBatch({
+        lookup: receiveLookup,
+      });
+      setReceiveFeedback({
+        type: 'success',
+        message: `Batch ${result.batchId} received successfully.`,
+        txHash: result.txHash,
+      });
+      setReceiveLookup('');
+    } catch (error) {
+      setReceiveFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Receive transaction failed.',
+      });
+    } finally {
+      setReceiveSubmitting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -28,10 +65,10 @@ export function CustomerDashboard() {
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
             <Shield className="mr-2 h-5 w-5" />
-            Read-Only Access
+            Customer Access
           </CardTitle>
           <CardDescription className="text-blue-700">
-            As a customer, you can view and verify product information but cannot modify any data
+            Customers can verify product history and receive batches that are explicitly transferred to them
           </CardDescription>
         </CardHeader>
       </Card>
@@ -40,23 +77,14 @@ export function CustomerDashboard() {
         <Card className="border-2 border-gray-200">
           <CardHeader>
             <CardTitle>Verify Product</CardTitle>
-            <CardDescription>Scan QR code or search by shipment ID</CardDescription>
+            <CardDescription>Search by batch ID or tracking code</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Link href="/scanner">
-              <Button className="h-16 w-full justify-start" size="lg">
-                <QrCode className="mr-3 h-6 w-6" />
-                <div className="text-left">
-                  <div className="font-semibold">Scan QR Code</div>
-                  <div className="text-xs opacity-90">Use camera to scan product QR</div>
-                </div>
-              </Button>
-            </Link>
             <Button className="h-16 w-full justify-start" variant="outline" size="lg">
               <Search className="mr-3 h-6 w-6" />
               <div className="text-left">
-                <div className="font-semibold">Search Shipment ID</div>
-                <div className="text-xs opacity-90">Enter shipment number manually</div>
+                <div className="font-semibold">Search by Batch ID</div>
+                <div className="text-xs opacity-90">Use a tracking code or numeric batch ID</div>
               </div>
             </Button>
           </CardContent>
@@ -90,10 +118,40 @@ export function CustomerDashboard() {
         </Card>
       </div>
 
+      <Card className="border-2 border-blue-200">
+        <CardHeader>
+          <CardTitle>Receive Transfer</CardTitle>
+          <CardDescription>Accept custody for a batch transferred to your customer wallet</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
+            <div className="space-y-2">
+              <Label htmlFor="customer-receive-lookup">Batch ID or tracking code</Label>
+              <Input
+                id="customer-receive-lookup"
+                value={receiveLookup}
+                onChange={(event) => setReceiveLookup(event.target.value)}
+                placeholder="e.g., 12 or BATCH-2026-001"
+                disabled={receiveSubmitting}
+              />
+            </div>
+            {receiveFeedback && (
+              <p className={`text-sm ${receiveFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                {receiveFeedback.message}
+                {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
+              </p>
+            )}
+            <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+              {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Recent Verifications</CardTitle>
-          <CardDescription>Products you have recently scanned</CardDescription>
+          <CardDescription>Products you have recently looked up</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -134,11 +192,12 @@ export function CustomerDashboard() {
                 <span className="mr-2">✅</span> You Can
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Scan QR codes</li>
+                <li>• Look up batches by ID or tracking code</li>
                 <li>• View shipment journey</li>
                 <li>• Verify authenticity</li>
                 <li>• Check environmental data</li>
                 <li>• See custody history</li>
+                <li>• Receive transferred batches</li>
               </ul>
             </div>
             <div>
@@ -148,7 +207,7 @@ export function CustomerDashboard() {
               <ul className="space-y-1.5 text-sm text-gray-700">
                 <li>• Create products</li>
                 <li>• Create batches</li>
-                <li>• Transfer shipments</li>
+                <li>• Initiate transfers to others</li>
                 <li>• Log events</li>
                 <li>• Modify any data</li>
               </ul>
