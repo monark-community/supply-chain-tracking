@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { ArrowRightLeft, Bluetooth, CheckCircle, Package, Search } from 'lucide-react';
+import { ArrowRightLeft, Bluetooth, CheckCircle, Package, Search, Waves } from 'lucide-react';
 import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
 import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
 import type { AppRole } from '@/lib/wallet-auth';
@@ -29,11 +29,15 @@ export default function ScannerPage() {
     nfcDeviceName,
     nfcDeviceId,
     connectionError,
+    isReadingNfc,
+    nfcReadError,
+    nfcPayloadSnapshot,
     blePhase,
     lastSuccessfulBlePhase,
     lastBleErrorName,
     lastBleErrorMessage,
     connectNfcDevice,
+    readNfcPayloadSnapshot,
     disconnectNfcDevice,
   } = useNfcBleBridge();
 
@@ -290,6 +294,10 @@ export default function ScannerPage() {
                 <Bluetooth className="mr-2 h-4 w-4" />
                 {isConnecting ? 'Connecting...' : 'Connect NFC Device'}
               </Button>
+              <Button variant="secondary" onClick={() => void readNfcPayloadSnapshot()} disabled={!isNfcConnected || isReadingNfc}>
+                <Waves className="mr-2 h-4 w-4" />
+                {isReadingNfc ? 'Reading...' : 'Read Payload Snapshot'}
+              </Button>
               <Button variant="outline" onClick={disconnectNfcDevice} disabled={!isNfcConnected}>
                 Disconnect
               </Button>
@@ -303,6 +311,17 @@ export default function ScannerPage() {
             ) : null}
 
             {connectionError ? <p className="text-sm text-red-600">{connectionError}</p> : null}
+            {nfcReadError ? <p className="text-sm text-red-600">{nfcReadError}</p> : null}
+
+            {nfcPayloadSnapshot ? (
+              <div className="rounded-md border bg-green-50 p-3 text-xs text-green-900">
+                <p className="font-semibold">Latest payload snapshot</p>
+                <p className="mt-1">Temp range: {nfcPayloadSnapshot.tempMin.toFixed(2)} to {nfcPayloadSnapshot.tempMax.toFixed(2)} C</p>
+                <p>Humidity range: {nfcPayloadSnapshot.humiMin.toFixed(2)} to {nfcPayloadSnapshot.humiMax.toFixed(2)} %</p>
+                <p>Flag: {nfcPayloadSnapshot.flag2}</p>
+                <p>Payload bytes: {nfcPayloadSnapshot.byteLength}</p>
+              </div>
+            ) : null}
 
             <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700">
               <p className="font-semibold text-slate-900">BLE Diagnostics</p>

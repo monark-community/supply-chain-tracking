@@ -30,6 +30,7 @@ type BluetoothRemoteGATTCharacteristicLike = {
 
 type BluetoothRemoteGATTServiceLike = {
   uuid: string;
+  getCharacteristic: (characteristic: string) => Promise<BluetoothRemoteGATTCharacteristicLike>;
   getCharacteristics: () => Promise<BluetoothRemoteGATTCharacteristicLike[]>;
 };
 
@@ -95,9 +96,30 @@ const decodeDataView = (value: DataView): string => {
 const nfcBleServiceUuid = process.env.NEXT_PUBLIC_NFC_BLE_SERVICE_UUID?.trim().toLowerCase() ?? '';
 const nfcBleDeviceNamePrefix = process.env.NEXT_PUBLIC_NFC_BLE_DEVICE_NAME_PREFIX?.trim() ?? 'ESP32';
 const nfcBleLegacyServiceUuid = '0110efbe-edfe-0d1c-2b3a-4f5e6d7c8b9a';
+const nfcBlePayloadUuid = '9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1002';
+const nfcBleLegacyPayloadUuid = '0210efbe-edfe-0d1c-2b3a-4f5e6d7c8b9a';
 
 const isDomExceptionNamed = (error: unknown, name: string): boolean =>
   error instanceof DOMException && error.name === name;
+
+const normalizeUuid = (value: string): string => value.replace(/-/g, '').toLowerCase();
+
+const toFriendlyReadError = (error: unknown): string => {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotSupportedError') {
+      return 'BLE read is not supported in the current security state. Disconnect, forget the ESP32 from Bluetooth settings, reconnect, and allow pairing.';
+    }
+    if (error.name === 'NotFoundError') {
+      return 'Payload characteristic was not found on the connected service.';
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return 'Failed to read BLE payload characteristic.';
+};
 
 const getServiceCandidates = (): string[] => {
   const candidates = [nfcBleServiceUuid, nfcBleLegacyServiceUuid]
@@ -111,6 +133,15 @@ type NfcReadableCharacteristic = {
   serviceUuid: string;
   characteristicUuid: string;
   label: string;
+};
+
+type NfcPayloadSnapshot = {
+  tempMin: number;
+  tempMax: number;
+  humiMin: number;
+  humiMax: number;
+  flag2: number;
+  byteLength: number;
 };
 
 type BlePhase =
@@ -134,6 +165,7 @@ export function useNfcBleBridge() {
   const [isReadingNfc, setIsReadingNfc] = useState(false);
   const [nfcLatestRawText, setNfcLatestRawText] = useState<string | null>(null);
   const [nfcReadError, setNfcReadError] = useState<string | null>(null);
+  const [nfcPayloadSnapshot, setNfcPayloadSnapshot] = useState<NfcPayloadSnapshot | null>(null);
   const [blePhase, setBlePhase] = useState<BlePhase>('idle');
   const [lastSuccessfulBlePhase, setLastSuccessfulBlePhase] = useState<BlePhase>('idle');
   const [lastBleErrorName, setLastBleErrorName] = useState<string | null>(null);
@@ -154,6 +186,7 @@ export function useNfcBleBridge() {
 
     setConnectionError(null);
     setNfcReadError(null);
+    setNfcPayloadSnapshot(null);
     setNfcLatestRawText(null);
     setLastBleErrorName(null);
     setLastBleErrorMessage(null);
@@ -230,6 +263,7 @@ export function useNfcBleBridge() {
       readableCharacteristicMapRef.current = {};
       setSelectedNfcCharacteristicId(null);
       setNfcReadError(null);
+      setNfcPayloadSnapshot(null);
       setConnectionError(null);
     } catch (error) {
       const details = getErrorDetails(error);
@@ -242,8 +276,80 @@ export function useNfcBleBridge() {
       setAvailableNfcCharacteristics([]);
       readableCharacteristicMapRef.current = {};
       setSelectedNfcCharacteristicId(null);
+      setNfcPayloadSnapshot(null);
     } finally {
       setIsConnecting(false);
+    }
+  };
+
+  const readNfcPayloadSnapshot = async () => {
+    if (!isNfcConnected) {
+      setNfcReadError('Connect a BLE device before reading payload data.');
+      setLastBleErrorName('ReadPreconditionError');
+      setLastBleErrorMessage('No connected BLE device when attempting payload read.');
+      return;
+    }
+
+    const device = connectedDevice;
+    if (!device?.gatt?.connected) {
+      setNfcReadError('BLE link is not active. Reconnect and try again.');
+      setLastBleErrorName('ReadPreconditionError');
+      setLastBleErrorMessage('Connected device did not have an active GATT connection.');
+      return;
+    }
+
+    setIsReadingNfc(true);
+    setBlePhase('readValue');
+    setLastBleErrorName(null);
+    setLastBleErrorMessage(null);
+    setNfcReadError(null);
+
+    try {
+      const serviceCandidates = getServiceCandidates();
+      const payloadCandidates = [nfcBlePayloadUuid, nfcBleLegacyPayloadUuid];
+      const payloadCandidateSet = new Set(payloadCandidates.map(normalizeUuid));
+      const services = await device.gatt.getPrimaryServices();
+      const service = services.find((candidate) => serviceCandidates.includes(candidate.uuid.toLowerCase()));
+
+      if (!service) {
+        throw new Error('Connected device no longer exposes the configured BLE service.');
+      }
+
+      const characteristics = await service.getCharacteristics();
+      let characteristic: BluetoothRemoteGATTCharacteristicLike | null =
+        characteristics.find((candidate) => payloadCandidateSet.has(normalizeUuid(candidate.uuid))) ?? null;
+
+      if (!characteristic) {
+        characteristic = characteristics.find((candidate) => candidate.properties.read) ?? null;
+      }
+
+      if (!characteristic) {
+        const discovered = characteristics.map((candidate) => candidate.uuid).join(', ') || 'none';
+        throw new Error(`No readable characteristic was found on service. Expected: ${payloadCandidates.join(', ')}. Discovered: ${discovered}.`);
+      }
+
+      const value = await characteristic.readValue();
+      if (value.byteLength < 17) {
+        throw new Error(`Payload size ${value.byteLength} bytes is smaller than expected 17 bytes.`);
+      }
+
+      setNfcPayloadSnapshot({
+        tempMin: value.getFloat32(0, true),
+        tempMax: value.getFloat32(4, true),
+        humiMin: value.getFloat32(8, true),
+        humiMax: value.getFloat32(12, true),
+        flag2: value.getUint8(16),
+        byteLength: value.byteLength,
+      });
+      setLastSuccessfulBlePhase('readValue');
+    } catch (error) {
+      const details = getErrorDetails(error);
+      setLastBleErrorName(details.name);
+      setLastBleErrorMessage(details.message);
+      setNfcReadError(toFriendlyReadError(error));
+    } finally {
+      setIsReadingNfc(false);
+      setBlePhase(isNfcConnected ? 'connected' : 'idle');
     }
   };
 
@@ -306,6 +412,8 @@ export function useNfcBleBridge() {
     readableCharacteristicMapRef.current = {};
     setSelectedNfcCharacteristicId(null);
     setIsReadingNfc(false);
+    setNfcPayloadSnapshot(null);
+    setNfcReadError(null);
   };
 
   return {
@@ -319,12 +427,14 @@ export function useNfcBleBridge() {
     isReadingNfc,
     nfcLatestRawText,
     nfcReadError,
+    nfcPayloadSnapshot,
     blePhase,
     lastSuccessfulBlePhase,
     lastBleErrorName,
     lastBleErrorMessage,
     setSelectedNfcCharacteristicId,
     connectNfcDevice,
+    readNfcPayloadSnapshot,
     readNfcCharacteristic,
     disconnectNfcDevice,
   };
