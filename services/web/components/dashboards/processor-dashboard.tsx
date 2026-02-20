@@ -308,7 +308,7 @@ export function ProcessorDashboard() {
                 <span className="mr-2">❌</span> You Cannot
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create products</li>
+                <li>• Create root batches</li>
                 <li>• Harvest root batches</li>
                 <li>• Assign participant roles</li>
               </ul>

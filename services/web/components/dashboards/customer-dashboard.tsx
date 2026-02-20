@@ -151,7 +151,7 @@ export function CustomerDashboard() {
       <Card>
         <CardHeader>
           <CardTitle>Recent Verifications</CardTitle>
-          <CardDescription>Products you have recently looked up</CardDescription>
+          <CardDescription>Batches you have recently looked up</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -205,7 +205,7 @@ export function CustomerDashboard() {
                 <span className="mr-2">❌</span> You Cannot
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create products</li>
+                <li>• Create root batches</li>
                 <li>• Create batches</li>
                 <li>• Initiate transfers to others</li>
                 <li>• Log events</li>

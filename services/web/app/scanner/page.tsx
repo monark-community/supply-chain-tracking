@@ -231,7 +231,7 @@ export default function ScannerPage() {
     return (
       <div className="grid gap-4 lg:grid-cols-2">
         <form onSubmit={handleVerify} className="space-y-3 rounded-lg border bg-white p-4">
-          <h4 className="font-semibold text-gray-900">Verify Product</h4>
+          <h4 className="font-semibold text-gray-900">Verify Batch</h4>
           <div className="space-y-2">
             <Label htmlFor="customer-verify-lookup">Batch ID or tracking code</Label>
             <Input

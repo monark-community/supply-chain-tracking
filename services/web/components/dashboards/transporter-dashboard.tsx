@@ -318,10 +318,10 @@ export function TransporterDashboard() {
                 <span className="mr-2">❌</span> You Cannot
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create products or batches</li>
+                <li>• Create root batches</li>
                 <li>• Log processing events</li>
                 <li>• Perform quality inspections</li>
-                <li>• Modify product data</li>
+                <li>• Modify batch source data</li>
               </ul>
             </div>
           </div>

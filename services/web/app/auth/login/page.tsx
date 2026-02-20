@@ -139,11 +139,11 @@ export default function LoginPage() {
                         <SelectValue placeholder="Select a role" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="producer">Producer - Create products and batches</SelectItem>
+                        <SelectItem value="producer">Producer - Create and manage batches</SelectItem>
                         <SelectItem value="processor">Processor - Split, merge, and transform batches</SelectItem>
                         <SelectItem value="warehouse">Warehouse - Receive, split, merge, and transfer custody</SelectItem>
                         <SelectItem value="transporter">Transporter - Move shipments</SelectItem>
-                        <SelectItem value="customer">Customer - Verify product authenticity</SelectItem>
+                        <SelectItem value="customer">Customer - Verify batch authenticity</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

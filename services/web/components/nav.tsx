@@ -12,7 +12,6 @@ import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Products', href: '/products', icon: Package },
   { name: 'Batches', href: '/batches', icon: MapPin },
   { name: 'NFC Console', href: '/scanner', icon: QrCode },
   { name: 'Audit Trail', href: '/audit', icon: FileText },
