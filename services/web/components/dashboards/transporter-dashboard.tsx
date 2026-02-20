@@ -1,12 +1,29 @@
 'use client';
 
-import Link from 'next/link';
+import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Truck, MapPin, Activity, Clock, QrCode, Eye } from 'lucide-react';
+import { Truck, MapPin, Activity, Clock, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
+import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
+
+type TxFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
+};
 
 export function TransporterDashboard() {
+  const [transferLookup, setTransferLookup] = useState('');
+  const [transferRecipient, setTransferRecipient] = useState('');
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+  const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
+  const [receiveLookup, setReceiveLookup] = useState('');
+  const [receiveSubmitting, setReceiveSubmitting] = useState(false);
+  const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+
   const stats = [
     { name: 'Active Shipments', value: '15', icon: Truck, change: '3 in transit' },
     { name: 'Delivered Today', value: '8', icon: MapPin, change: 'On schedule' },
@@ -19,6 +36,56 @@ export function TransporterDashboard() {
     { batch: 'BATCH-Z3W4', product: 'Tea Leaves', from: 'Mountain Tea Co.', to: 'Processing Plant', status: 'Loaded', eta: '6 hours' },
     { batch: 'BATCH-A5B6', product: 'Cocoa', from: 'Ethical Cocoa Ltd.', to: 'Chocolate Factory', status: 'In Transit', eta: '1 day' },
   ];
+
+  const handleTransfer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTransferSubmitting(true);
+    setTransferFeedback(null);
+    try {
+      const result = await initiateBatchTransfer({
+        lookup: transferLookup,
+        to: transferRecipient,
+      });
+      setTransferFeedback({
+        type: 'success',
+        message: `Transfer initiated for batch ${result.batchId}.`,
+        txHash: result.txHash,
+      });
+      setTransferLookup('');
+      setTransferRecipient('');
+    } catch (error) {
+      setTransferFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Transfer initiation failed.',
+      });
+    } finally {
+      setTransferSubmitting(false);
+    }
+  };
+
+  const handleReceive = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setReceiveSubmitting(true);
+    setReceiveFeedback(null);
+    try {
+      const result = await receiveTransferredBatch({
+        lookup: receiveLookup,
+      });
+      setReceiveFeedback({
+        type: 'success',
+        message: `Batch ${result.batchId} received successfully.`,
+        txHash: result.txHash,
+      });
+      setReceiveLookup('');
+    } catch (error) {
+      setReceiveFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Receive transaction failed.',
+      });
+    } finally {
+      setReceiveSubmitting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -52,30 +119,72 @@ export function TransporterDashboard() {
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
-            <QrCode className="mr-2 h-5 w-5" />
-            QR Scanner Operations
+            <Truck className="mr-2 h-5 w-5" />
+            Transfer Operations
           </CardTitle>
           <CardDescription className="text-blue-700">
-            Scan QR codes to receive shipments and deliver to the next handoff point
+            Receive pending transfers and hand off shipments to the next role
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Link href="/scanner">
-              <Button className="w-full h-24 flex-col" size="lg">
-                <Truck className="h-8 w-8 mb-2" />
-                <span className="font-semibold text-base">Receive Shipment</span>
-                <span className="text-xs opacity-90">Accept custody when picking up goods</span>
-              </Button>
-            </Link>
-            <Link href="/scanner">
-              <Button className="w-full h-24 flex-col" variant="outline" size="lg">
-                <MapPin className="h-8 w-8 mb-2" />
-                <span className="font-semibold text-base">Deliver Shipment</span>
-                <span className="text-xs opacity-90">Transfer custody to receiving location</span>
-              </Button>
-            </Link>
-          </div>
+        <CardContent className="grid gap-4 lg:grid-cols-2">
+          <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
+            <h4 className="font-semibold text-gray-900">Receive Shipment</h4>
+            <div className="space-y-2">
+              <Label htmlFor="transporter-receive-lookup">Batch ID or tracking code</Label>
+              <Input
+                id="transporter-receive-lookup"
+                value={receiveLookup}
+                onChange={(event) => setReceiveLookup(event.target.value)}
+                placeholder="e.g., 12 or BATCH-2026-001"
+                disabled={receiveSubmitting}
+              />
+            </div>
+            {receiveFeedback && (
+              <p className={`text-sm ${receiveFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                {receiveFeedback.message}
+                {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
+              </p>
+            )}
+            <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+              <Truck className="mr-2 h-4 w-4" />
+              {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
+            </Button>
+          </form>
+
+          <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
+            <h4 className="font-semibold text-gray-900">Deliver Shipment</h4>
+            <div className="space-y-2">
+              <Label htmlFor="transporter-transfer-lookup">Batch ID or tracking code</Label>
+              <Input
+                id="transporter-transfer-lookup"
+                value={transferLookup}
+                onChange={(event) => setTransferLookup(event.target.value)}
+                placeholder="e.g., 12 or BATCH-2026-001"
+                disabled={transferSubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="transporter-transfer-recipient">Recipient wallet</Label>
+              <Input
+                id="transporter-transfer-recipient"
+                value={transferRecipient}
+                onChange={(event) => setTransferRecipient(event.target.value)}
+                placeholder="0x..."
+                disabled={transferSubmitting}
+              />
+            </div>
+            {transferFeedback && (
+              <p className={`text-sm ${transferFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                {transferFeedback.message}
+                {transferFeedback.txHash ? ` tx: ${transferFeedback.txHash}` : ''}
+              </p>
+            )}
+            <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+              <MapPin className="mr-2 h-4 w-4" />
+              {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
+            </Button>
+          </form>
+
         </CardContent>
       </Card>
 
@@ -107,12 +216,9 @@ export function TransporterDashboard() {
                 Check product details and quantity
               </li>
             </ul>
-            <Link href="/scanner">
-              <Button variant="outline" className="w-full mt-4">
-                <QrCode className="mr-2 h-4 w-4" />
-                Scan to View Shipment
-              </Button>
-            </Link>
+            <p className="pt-2 text-xs text-gray-500">
+              Use the batch ID or tracking code lookup fields above to inspect shipment details.
+            </p>
           </CardContent>
         </Card>
 
@@ -163,7 +269,7 @@ export function TransporterDashboard() {
               </div>
               <h4 className="font-semibold text-gray-900 mb-2">Receive Shipment</h4>
               <p className="text-sm text-gray-700">
-                Scan QR at pickup location to accept custody and record transfer event
+                Look up by batch ID or tracking code at pickup to accept custody and record transfer
               </p>
             </div>
             <div className="rounded-lg border-2 border-gray-200 p-4">
@@ -181,7 +287,7 @@ export function TransporterDashboard() {
               </div>
               <h4 className="font-semibold text-gray-900 mb-2">Deliver Shipment</h4>
               <p className="text-sm text-gray-700">
-                Scan QR at delivery to transfer custody to the receiving location
+                Look up by batch ID or tracking code at delivery to transfer custody to the receiver
               </p>
             </div>
           </div>
@@ -200,7 +306,7 @@ export function TransporterDashboard() {
                 <span className="mr-2">✅</span> You Can
               </h4>
               <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Scan QR codes</li>
+                <li>• Look up batches by ID or tracking code</li>
                 <li>• Receive shipments (pickup)</li>
                 <li>• Deliver shipments (drop-off)</li>
                 <li>• View shipment details</li>

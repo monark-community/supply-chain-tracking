@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Package, MapPin, FileText, LayoutDashboard, QrCode } from 'lucide-react';
+import { Package, MapPin, FileText, LayoutDashboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -14,7 +14,6 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Products', href: '/products', icon: Package },
   { name: 'Batches', href: '/batches', icon: MapPin },
-  { name: 'QR Scanner', href: '/scanner', icon: QrCode },
   { name: 'Audit Trail', href: '/audit', icon: FileText },
 ];
 

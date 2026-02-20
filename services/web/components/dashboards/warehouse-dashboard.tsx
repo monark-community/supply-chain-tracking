@@ -1,12 +1,29 @@
 'use client';
 
-import Link from 'next/link';
+import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { Archive, Package, ArrowRightLeft, QrCode, Boxes, TrendingUp } from 'lucide-react';
+import { Archive, Package, ArrowRightLeft, Boxes, TrendingUp } from 'lucide-react';
+import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
+
+type TxFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
+};
 
 export function WarehouseDashboard() {
+  const [transferLookup, setTransferLookup] = useState('');
+  const [transferRecipient, setTransferRecipient] = useState('');
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+  const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
+  const [receiveLookup, setReceiveLookup] = useState('');
+  const [receiveSubmitting, setReceiveSubmitting] = useState(false);
+  const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+
   const stats = [
     { name: 'Batches in Storage', value: '21', icon: Archive, change: '4 staged for dispatch' },
     { name: 'Received Today', value: '9', icon: Package, change: '2 pending inspection' },
@@ -24,6 +41,56 @@ export function WarehouseDashboard() {
     'Received': 'bg-blue-100 text-blue-800',
     'Ready to Merge': 'bg-purple-100 text-purple-800',
     'Awaiting Transfer': 'bg-green-100 text-green-800',
+  };
+
+  const handleTransfer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTransferSubmitting(true);
+    setTransferFeedback(null);
+    try {
+      const result = await initiateBatchTransfer({
+        lookup: transferLookup,
+        to: transferRecipient,
+      });
+      setTransferFeedback({
+        type: 'success',
+        message: `Transfer initiated for batch ${result.batchId}.`,
+        txHash: result.txHash,
+      });
+      setTransferLookup('');
+      setTransferRecipient('');
+    } catch (error) {
+      setTransferFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Transfer initiation failed.',
+      });
+    } finally {
+      setTransferSubmitting(false);
+    }
+  };
+
+  const handleReceive = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setReceiveSubmitting(true);
+    setReceiveFeedback(null);
+    try {
+      const result = await receiveTransferredBatch({
+        lookup: receiveLookup,
+      });
+      setReceiveFeedback({
+        type: 'success',
+        message: `Batch ${result.batchId} received successfully.`,
+        txHash: result.txHash,
+      });
+      setReceiveLookup('');
+    } catch (error) {
+      setReceiveFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Receive transaction failed.',
+      });
+    } finally {
+      setReceiveSubmitting(false);
+    }
   };
 
   return (
@@ -58,36 +125,77 @@ export function WarehouseDashboard() {
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
-            <QrCode className="mr-2 h-5 w-5" />
+            <Archive className="mr-2 h-5 w-5" />
             Warehouse Actions
           </CardTitle>
           <CardDescription className="text-blue-700">
             Receive custody, split and merge lots, and hand off to transport
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Link href="/scanner">
-              <Button className="w-full h-20 flex-col" size="lg">
-                <Package className="h-6 w-6 mb-1" />
-                <span className="font-semibold">Receive Batch</span>
-                <span className="text-xs opacity-90">Take custody</span>
-              </Button>
-            </Link>
-            <Link href="/scanner">
-              <Button className="w-full h-20 flex-col" variant="outline" size="lg">
-                <Boxes className="h-6 w-6 mb-1" />
-                <span className="font-semibold">Split / Merge</span>
-                <span className="text-xs opacity-90">Manage lots</span>
-              </Button>
-            </Link>
-            <Link href="/scanner">
-              <Button className="w-full h-20 flex-col" variant="outline" size="lg">
-                <ArrowRightLeft className="h-6 w-6 mb-1" />
-                <span className="font-semibold">Transfer Batch</span>
-                <span className="text-xs opacity-90">Handover next</span>
-              </Button>
-            </Link>
+        <CardContent className="grid gap-4 lg:grid-cols-2">
+          <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
+            <h4 className="font-semibold text-gray-900">Receive Batch</h4>
+            <div className="space-y-2">
+              <Label htmlFor="warehouse-receive-lookup">Batch ID or tracking code</Label>
+              <Input
+                id="warehouse-receive-lookup"
+                value={receiveLookup}
+                onChange={(event) => setReceiveLookup(event.target.value)}
+                placeholder="e.g., 12 or BATCH-2026-001"
+                disabled={receiveSubmitting}
+              />
+            </div>
+            {receiveFeedback && (
+              <p className={`text-sm ${receiveFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                {receiveFeedback.message}
+                {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
+              </p>
+            )}
+            <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+              <Package className="mr-2 h-4 w-4" />
+              {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
+            </Button>
+          </form>
+
+          <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
+            <h4 className="font-semibold text-gray-900">Transfer Batch</h4>
+            <div className="space-y-2">
+              <Label htmlFor="warehouse-transfer-lookup">Batch ID or tracking code</Label>
+              <Input
+                id="warehouse-transfer-lookup"
+                value={transferLookup}
+                onChange={(event) => setTransferLookup(event.target.value)}
+                placeholder="e.g., 12 or BATCH-2026-001"
+                disabled={transferSubmitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="warehouse-transfer-recipient">Recipient wallet</Label>
+              <Input
+                id="warehouse-transfer-recipient"
+                value={transferRecipient}
+                onChange={(event) => setTransferRecipient(event.target.value)}
+                placeholder="0x..."
+                disabled={transferSubmitting}
+              />
+            </div>
+            {transferFeedback && (
+              <p className={`text-sm ${transferFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+                {transferFeedback.message}
+                {transferFeedback.txHash ? ` tx: ${transferFeedback.txHash}` : ''}
+              </p>
+            )}
+            <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+              <ArrowRightLeft className="mr-2 h-4 w-4" />
+              {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
+            </Button>
+          </form>
+
+          <div className="lg:col-span-2 grid gap-3 sm:grid-cols-2">
+            <Button className="w-full" variant="outline" disabled>
+              <Boxes className="h-4 w-4 mr-2" />
+              Split / Merge (next)
+            </Button>
           </div>
         </CardContent>
       </Card>
