@@ -1,211 +1,259 @@
 'use client';
 
-import { useState } from 'react';
+import Link from 'next/link';
+import { useState, type FormEvent } from 'react';
 import { Nav } from '@/components/nav';
-import { useNFC } from '@/hooks/useNFC';
+import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ArrowRightLeft, Bluetooth, CheckCircle, Package, Search } from 'lucide-react';
+import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
+import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
+import type { AppRole } from '@/lib/wallet-auth';
 
-type DemoRole = 'producer' | 'transporter' | 'warehouse';
-type Verdict = 'valid' | 'rejected' | null;
-
-type ParsedTagPayload = {
-  batchId: string | null;
-  flagged: boolean | null;
-  raw: string;
-};
-
-const ROLE_STORAGE_KEY = 'chainproof-nfc-demo-role';
-
-const parseTagPayload = (raw: string): ParsedTagPayload => {
-  try {
-    const parsed = JSON.parse(raw) as { batchId?: unknown; flagged?: unknown };
-    const batchId = typeof parsed.batchId === 'string' ? parsed.batchId : null;
-    const flagged =
-      typeof parsed.flagged === 'boolean'
-        ? parsed.flagged
-        : typeof parsed.flagged === 'string'
-          ? parsed.flagged.toLowerCase() === 'true'
-          : null;
-
-    return { batchId, flagged, raw };
-  } catch {
-    return { batchId: raw || null, flagged: null, raw };
-  }
+type TxFeedback = {
+  type: 'success' | 'error';
+  message: string;
+  txHash?: string;
 };
 
 export default function ScannerPage() {
-  const [role, setRole] = useState<DemoRole>(() => {
-    if (typeof window === 'undefined') {
-      return 'producer';
-    }
+  const { role, isConnected } = useWalletAuth();
+  const { isConnecting, isNfcConnected, nfcDeviceName, nfcDeviceId, connectionError, connectNfcDevice, disconnectNfcDevice } =
+    useNfcBleBridge();
 
-    const saved = window.localStorage.getItem(ROLE_STORAGE_KEY) as DemoRole | null;
-    return saved ?? 'producer';
-  });
-  const [statusMessage, setStatusMessage] = useState('Ready for NFC flow.');
-  const [mockReadPayload, setMockReadPayload] = useState('{"batchId":"BATCH-DEMO-001","flagged":false}');
-  const [mockWritePayload, setMockWritePayload] = useState('START_SENSOR');
-  const [lastBatchId, setLastBatchId] = useState<string | null>(null);
-  const [verdict, setVerdict] = useState<Verdict>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [transferLookup, setTransferLookup] = useState('');
+  const [transferRecipient, setTransferRecipient] = useState('');
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+  const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
 
-  const {
-    isSupported,
-    isReading,
-    isWriting,
-    lastRead,
-    lastWritten,
-    error,
-    readTag,
-    writeTag,
-    mockRead,
-    mockWrite,
-  } = useNFC();
+  const [receiveLookup, setReceiveLookup] = useState('');
+  const [receiveSubmitting, setReceiveSubmitting] = useState(false);
+  const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
 
-  const handleRoleChange = (value: string) => {
-    const nextRole = value as DemoRole;
-    setRole(nextRole);
-    window.localStorage.setItem(ROLE_STORAGE_KEY, nextRole);
-    setVerdict(null);
-    setStatusMessage(`Role changed to ${nextRole}.`);
-  };
+  const [verifyLookup, setVerifyLookup] = useState('');
+  const [verifySubmitting, setVerifySubmitting] = useState(false);
+  const [verifyFeedback, setVerifyFeedback] = useState<TxFeedback | null>(null);
 
-  const createDemoBatchId = () => `BATCH-${Date.now()}`;
+  const activeRole: AppRole = isConnected ? role : 'none';
 
-  const runDemoApi = async (
-    endpoint: 'createShipment' | 'startShipment' | 'receiveShipment' | 'finalizeVerdict',
-    payload: Record<string, unknown>
-  ): Promise<{ ok: boolean; batchId?: string }> => {
-    // TODO: DEMO ONLY - REVISIT FOR PRODUCTION.
-    // TODO: DEMO ONLY - REVISIT FOR PRODUCTION.
-    // UI-only placeholder while backend/API routes are pending.
-    await new Promise((resolve) => setTimeout(resolve, 450));
-
-    if (endpoint === 'createShipment') {
-      return { ok: true, batchId: createDemoBatchId() };
-    }
-
-    if (endpoint === 'startShipment' || endpoint === 'receiveShipment' || endpoint === 'finalizeVerdict') {
-      return { ok: true, batchId: typeof payload.batchId === 'string' ? payload.batchId : undefined };
-    }
-
-    return { ok: true };
-  };
-
-  const readFromTag = async (): Promise<string> => {
-    if (isSupported) {
-      return readTag();
-    }
-
-    // TODO: DEMO ONLY - REVISIT FOR PRODUCTION.
-    return mockRead(mockReadPayload);
-  };
-
-  const writeToTag = async (payload: string): Promise<void> => {
-    if (isSupported) {
-      await writeTag(payload);
-      return;
-    }
-
-    // TODO: DEMO ONLY - REVISIT FOR PRODUCTION.
-    mockWrite(payload);
-    setMockWritePayload(payload);
-  };
-
-  const handleProducerFlow = async () => {
-    setIsSubmitting(true);
-    setVerdict(null);
+  const handleTransfer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTransferSubmitting(true);
+    setTransferFeedback(null);
 
     try {
-      setStatusMessage('Creating shipment on-chain...');
-      const createResult = await runDemoApi('createShipment', { role, contractMethod: 'harvestBatch' });
-      const batchId = createResult.batchId ?? createDemoBatchId();
-      const payload = JSON.stringify({ batchId, flagged: false });
-
-      setLastBatchId(batchId);
-      setMockReadPayload(payload);
-      setStatusMessage('Tap tag again to write batchId to IoT device.');
-      await writeToTag(payload);
-      setStatusMessage(`Shipment created and batch ${batchId} written to tag.`);
-    } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : 'Producer flow failed.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleTransporterFlow = async () => {
-    setIsSubmitting(true);
-    setVerdict(null);
-
-    try {
-      setStatusMessage('Tap tag to read batchId and take transporter custody.');
-      const raw = await readFromTag();
-      const parsed = parseTagPayload(raw);
-      if (!parsed.batchId) {
-        throw new Error('No batchId found on NFC tag.');
-      }
-
-      setLastBatchId(parsed.batchId);
-      await runDemoApi('startShipment', {
-        batchId: parsed.batchId,
-        contractMethod: 'initiateTransfer/receiveBatch',
+      const result = await initiateBatchTransfer({
+        lookup: transferLookup,
+        to: transferRecipient,
       });
-
-      setStatusMessage('Custody updated. Tap again to send START_SENSOR to MCU.');
-      await writeToTag('START_SENSOR');
-      setStatusMessage(`Transporter flow complete for ${parsed.batchId}.`);
+      setTransferFeedback({
+        type: 'success',
+        message: `Transfer initiated for batch ${result.batchId}.`,
+        txHash: result.txHash,
+      });
+      setTransferLookup('');
+      setTransferRecipient('');
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : 'Transporter flow failed.');
+      setTransferFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Transfer initiation failed.',
+      });
     } finally {
-      setIsSubmitting(false);
+      setTransferSubmitting(false);
     }
   };
 
-  const handleWarehouseFlow = async () => {
-    setIsSubmitting(true);
+  const handleReceive = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setReceiveSubmitting(true);
+    setReceiveFeedback(null);
 
     try {
-      setStatusMessage('First tap: confirm warehouse receipt and read MCU flag.');
-      const raw = await readFromTag();
-      const parsed = parseTagPayload(raw);
-      if (!parsed.batchId) {
-        throw new Error('No batchId found on NFC tag.');
-      }
-
-      setLastBatchId(parsed.batchId);
-
-      // TODO: DEMO ONLY - REVISIT FOR PRODUCTION.
-      // First tap performs custody receipt + sensor flag read for immediate verdict display.
-      await runDemoApi('receiveShipment', {
-        batchId: parsed.batchId,
-        contractMethod: 'receiveBatch',
+      const result = await receiveTransferredBatch({
+        lookup: receiveLookup,
       });
+      setReceiveFeedback({
+        type: 'success',
+        message: `Batch ${result.batchId} received successfully.`,
+        txHash: result.txHash,
+      });
+      setReceiveLookup('');
+    } catch (err) {
+      setReceiveFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Receive transaction failed.',
+      });
+    } finally {
+      setReceiveSubmitting(false);
+    }
+  };
 
-      const isFlagged = parsed.flagged ?? false;
-      const nextVerdict: Verdict = isFlagged ? 'rejected' : 'valid';
-      setVerdict(nextVerdict);
+  const handleVerify = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setVerifySubmitting(true);
+    setVerifyFeedback(null);
 
-      setStatusMessage(
-        `Warehouse custody confirmed for ${parsed.batchId}. Verdict: ${nextVerdict.toUpperCase()}. Final tap to STOP sensor and persist verdict.`
+    try {
+      const result = await readBatchByTrackingOrId(verifyLookup);
+      setVerifyFeedback({
+        type: 'success',
+        message: `Verified batch ${result.batch.id} (${result.batch.trackingCode || 'no tracking code'}) on chain ${result.chainId}.`,
+      });
+    } catch (err) {
+      setVerifyFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Verification failed.',
+      });
+    } finally {
+      setVerifySubmitting(false);
+    }
+  };
+
+  const renderTxFeedback = (feedback: TxFeedback | null) => {
+    if (!feedback) return null;
+    return (
+      <p className={`text-sm ${feedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+        {feedback.message}
+        {feedback.txHash ? ` tx: ${feedback.txHash}` : ''}
+      </p>
+    );
+  };
+
+  const renderTransferForm = (prefix: string, title = 'Initiate Transfer') => (
+    <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
+      <h4 className="font-semibold text-gray-900">{title}</h4>
+      <div className="space-y-2">
+        <Label htmlFor={`${prefix}-transfer-lookup`}>Batch ID or tracking code</Label>
+        <Input
+          id={`${prefix}-transfer-lookup`}
+          value={transferLookup}
+          onChange={(event) => setTransferLookup(event.target.value)}
+          placeholder="e.g., 12 or BATCH-2026-001"
+          disabled={transferSubmitting}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor={`${prefix}-transfer-recipient`}>Recipient wallet</Label>
+        <Input
+          id={`${prefix}-transfer-recipient`}
+          value={transferRecipient}
+          onChange={(event) => setTransferRecipient(event.target.value)}
+          placeholder="0x..."
+          disabled={transferSubmitting}
+        />
+      </div>
+      {renderTxFeedback(transferFeedback)}
+      <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+        <ArrowRightLeft className="mr-2 h-4 w-4" />
+        {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
+      </Button>
+    </form>
+  );
+
+  const renderReceiveForm = (prefix: string, title = 'Receive Batch') => (
+    <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
+      <h4 className="font-semibold text-gray-900">{title}</h4>
+      <div className="space-y-2">
+        <Label htmlFor={`${prefix}-receive-lookup`}>Batch ID or tracking code</Label>
+        <Input
+          id={`${prefix}-receive-lookup`}
+          value={receiveLookup}
+          onChange={(event) => setReceiveLookup(event.target.value)}
+          placeholder="e.g., 12 or BATCH-2026-001"
+          disabled={receiveSubmitting}
+        />
+      </div>
+      {renderTxFeedback(receiveFeedback)}
+      <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+        <Package className="mr-2 h-4 w-4" />
+        {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
+      </Button>
+    </form>
+  );
+
+  const renderRoleActions = () => {
+    if (activeRole === 'none') {
+      return (
+        <p className="text-sm text-gray-600">
+          Sign in with a wallet and assign a role to enable role-specific actions.
+        </p>
       );
-
-      await writeToTag('STOP_SENSOR');
-      await runDemoApi('finalizeVerdict', {
-        batchId: parsed.batchId,
-        flagged: isFlagged,
-      });
-      setStatusMessage(`Warehouse flow complete for ${parsed.batchId}.`);
-    } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : 'Warehouse flow failed.');
-    } finally {
-      setIsSubmitting(false);
     }
+
+    if (activeRole === 'producer') {
+      return (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Link href="/batches?action=harvest">
+              <Button className="w-full">Create New Batch</Button>
+            </Link>
+            <Button variant="outline" className="w-full" disabled>
+              Log Event (next)
+            </Button>
+          </div>
+          {renderTransferForm('producer')}
+        </div>
+      );
+    }
+
+    if (activeRole === 'transporter') {
+      return (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {renderReceiveForm('transporter', 'Receive Shipment')}
+          {renderTransferForm('transporter', 'Deliver Shipment')}
+        </div>
+      );
+    }
+
+    if (activeRole === 'warehouse') {
+      return (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {renderReceiveForm('warehouse')}
+          {renderTransferForm('warehouse', 'Transfer Batch')}
+        </div>
+      );
+    }
+
+    if (activeRole === 'processor') {
+      return (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {renderTransferForm('processor')}
+          {renderReceiveForm('processor')}
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid gap-4 lg:grid-cols-2">
+        <form onSubmit={handleVerify} className="space-y-3 rounded-lg border bg-white p-4">
+          <h4 className="font-semibold text-gray-900">Verify Product</h4>
+          <div className="space-y-2">
+            <Label htmlFor="customer-verify-lookup">Batch ID or tracking code</Label>
+            <Input
+              id="customer-verify-lookup"
+              value={verifyLookup}
+              onChange={(event) => setVerifyLookup(event.target.value)}
+              placeholder="e.g., 12 or BATCH-2026-001"
+              disabled={verifySubmitting}
+            />
+          </div>
+          {renderTxFeedback(verifyFeedback)}
+          <Button className="w-full" disabled={verifySubmitting || !verifyLookup.trim()}>
+            <Search className="mr-2 h-4 w-4" />
+            {verifySubmitting ? 'Verifying...' : 'Verify Batch'}
+          </Button>
+        </form>
+        {renderReceiveForm('customer')}
+      </div>
+    );
   };
+
+  const roleLabel = activeRole === 'none' ? 'No role assigned' : activeRole;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -213,139 +261,51 @@ export default function ScannerPage() {
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <Card>
           <CardHeader>
-            <CardTitle>NFC Shipment Console</CardTitle>
+            <CardTitle>NFC Console Connection</CardTitle>
             <CardDescription>
-              Role-based NFC flow for Producer, Transporter, and Warehouse with desktop mock fallback.
+              Temporary BLE bridge for NFC workflow testing. Final production behavior will switch to NFC.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="active-role">Active Role</Label>
-              <Select value={role} onValueChange={handleRoleChange}>
-                <SelectTrigger id="active-role">
-                  <SelectValue placeholder="Select role" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="producer">Producer</SelectItem>
-                  <SelectItem value="transporter">Transporter</SelectItem>
-                  <SelectItem value="warehouse">Warehouse</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={isSupported ? 'success' : 'warning'}>
-                {isSupported ? 'WebNFC supported' : 'WebNFC unavailable (desktop mock active)'}
+              <Badge variant={isNfcConnected ? 'success' : 'outline'}>
+                {isNfcConnected ? 'NFC device connected' : 'NFC device not connected'}
               </Badge>
-              <Badge variant={isReading ? 'secondary' : 'outline'}>{isReading ? 'Reading tag...' : 'Reader idle'}</Badge>
-              <Badge variant={isWriting ? 'secondary' : 'outline'}>{isWriting ? 'Writing tag...' : 'Writer idle'}</Badge>
+              <Badge variant={isConnected ? 'secondary' : 'warning'}>{isConnected ? `Role: ${roleLabel}` : 'Wallet disconnected'}</Badge>
             </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => void connectNfcDevice()} disabled={isConnecting || isNfcConnected}>
+                <Bluetooth className="mr-2 h-4 w-4" />
+                {isConnecting ? 'Connecting...' : 'Connect NFC Device'}
+              </Button>
+              <Button variant="outline" onClick={disconnectNfcDevice} disabled={!isNfcConnected}>
+                Disconnect
+              </Button>
+            </div>
+
+            {isNfcConnected ? (
+              <p className="text-sm text-gray-700">
+                Connected to <span className="font-semibold">{nfcDeviceName || 'Unnamed ESP32'}</span>
+                {nfcDeviceId ? ` (${nfcDeviceId})` : ''}.
+              </p>
+            ) : null}
+
+            {connectionError ? <p className="text-sm text-red-600">{connectionError}</p> : null}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Role Action</CardTitle>
-            <CardDescription>Run the required flow for the selected role.</CardDescription>
+            <CardTitle className="flex items-center">
+              <CheckCircle className="mr-2 h-5 w-5 text-blue-600" />
+              Role Action
+            </CardTitle>
+            <CardDescription>
+              Actions are always visible during testing. Later we can gate this section behind NFC device connection.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {role === 'producer' ? (
-              <Button disabled={isSubmitting} onClick={handleProducerFlow}>
-                Create Shipment
-              </Button>
-            ) : null}
-
-            {role === 'transporter' ? (
-              <Button disabled={isSubmitting} onClick={handleTransporterFlow}>
-                Scan Pallet
-              </Button>
-            ) : null}
-
-            {role === 'warehouse' ? (
-              <Button disabled={isSubmitting} onClick={handleWarehouseFlow}>
-                Receive Pallet
-              </Button>
-            ) : null}
-
-            {verdict ? (
-              <div
-                className={`rounded-xl px-4 py-8 text-center text-5xl font-black sm:text-7xl ${
-                  verdict === 'valid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                }`}
-              >
-                {verdict === 'valid' ? 'VALID' : 'REJECTED'}
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Desktop Mock NFC Controls</CardTitle>
-            <CardDescription>Use this on browsers without WebNFC support.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="mock-read-payload">Mock NFC Read Payload</Label>
-              <input
-                id="mock-read-payload"
-                value={mockReadPayload}
-                onChange={(event) => setMockReadPayload(event.target.value)}
-                className="h-10 w-full rounded-lg border-2 border-gray-300 px-3 text-sm focus:border-blue-600 focus:outline-none"
-              />
-              <Button
-                variant="outline"
-                onClick={() => {
-                  const payload = mockRead(mockReadPayload);
-                  setStatusMessage(`Mock read completed: ${payload}`);
-                }}
-              >
-                Mock NFC Read
-              </Button>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="mock-write-payload">Mock NFC Write Payload</Label>
-              <input
-                id="mock-write-payload"
-                value={mockWritePayload}
-                onChange={(event) => setMockWritePayload(event.target.value)}
-                className="h-10 w-full rounded-lg border-2 border-gray-300 px-3 text-sm focus:border-blue-600 focus:outline-none"
-              />
-              <Button
-                variant="outline"
-                onClick={() => {
-                  mockWrite(mockWritePayload);
-                  setStatusMessage(`Mock write completed: ${mockWritePayload}`);
-                }}
-              >
-                Mock NFC Write
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Live Demo State</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p>
-              <span className="font-semibold">Status:</span> {statusMessage}
-            </p>
-            <p>
-              <span className="font-semibold">Last Batch ID:</span> {lastBatchId ?? 'N/A'}
-            </p>
-            <p>
-              <span className="font-semibold">Last Read Payload:</span> {lastRead ?? 'N/A'}
-            </p>
-            <p>
-              <span className="font-semibold">Last Write Payload:</span> {lastWritten ?? 'N/A'}
-            </p>
-            {error ? (
-              <p className="font-semibold text-red-600">NFC Error: {error}</p>
-            ) : null}
-          </CardContent>
+          <CardContent>{renderRoleActions()}</CardContent>
         </Card>
       </main>
     </div>
