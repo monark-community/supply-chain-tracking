@@ -4,6 +4,10 @@ import { useRef, useState } from 'react';
 
 type BluetoothRequestDeviceOptionsLike = {
   acceptAllDevices?: boolean;
+  filters?: Array<{
+    services?: string[];
+    namePrefix?: string;
+  }>;
   optionalServices?: string[];
 };
 
@@ -48,7 +52,11 @@ declare global {
 const toFriendlyBluetoothError = (error: unknown): string => {
   if (error instanceof DOMException) {
     if (error.name === 'NotFoundError') {
-      return 'No BLE device was selected.';
+      const loweredMessage = error.message.toLowerCase();
+      if (loweredMessage.includes('service') || loweredMessage.includes('services')) {
+        return 'Connected to a BLE device, but the configured service was not discovered. Ensure you selected the ESP32 device and no other app is connected to it.';
+      }
+      return 'No BLE device was selected (or no matching BLE device is currently available).';
     }
 
     if (error.name === 'NetworkError') {
@@ -85,6 +93,18 @@ const decodeDataView = (value: DataView): string => {
 };
 
 const nfcBleServiceUuid = process.env.NEXT_PUBLIC_NFC_BLE_SERVICE_UUID?.trim().toLowerCase() ?? '';
+const nfcBleDeviceNamePrefix = process.env.NEXT_PUBLIC_NFC_BLE_DEVICE_NAME_PREFIX?.trim() ?? 'ESP32';
+const nfcBleLegacyServiceUuid = '0110efbe-edfe-0d1c-2b3a-4f5e6d7c8b9a';
+
+const isDomExceptionNamed = (error: unknown, name: string): boolean =>
+  error instanceof DOMException && error.name === name;
+
+const getServiceCandidates = (): string[] => {
+  const candidates = [nfcBleServiceUuid, nfcBleLegacyServiceUuid]
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(candidates));
+};
 
 type NfcReadableCharacteristic = {
   id: string;
@@ -98,7 +118,6 @@ type BlePhase =
   | 'requestDevice'
   | 'connectGatt'
   | 'discoverPrimaryServices'
-  | 'discoverReadableCharacteristics'
   | 'connected'
   | 'readValue'
   | 'disconnected';
@@ -127,7 +146,8 @@ export function useNfcBleBridge() {
       return;
     }
 
-    if (!nfcBleServiceUuid) {
+    const serviceCandidates = getServiceCandidates();
+    if (serviceCandidates.length === 0) {
       setConnectionError('Missing NEXT_PUBLIC_NFC_BLE_SERVICE_UUID. Add it to services/web/.env.local and restart the dev server.');
       return;
     }
@@ -141,11 +161,31 @@ export function useNfcBleBridge() {
 
     try {
       setBlePhase('requestDevice');
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [nfcBleServiceUuid],
-      });
+      let device: BluetoothDeviceLike;
+      try {
+        device = await navigator.bluetooth.requestDevice({
+          filters: serviceCandidates.map((uuid) => ({ services: [uuid] })),
+          optionalServices: serviceCandidates,
+        });
+      } catch (error) {
+        // Some stacks advertise the device name but omit the custom service UUID in ADV data.
+        // Fallback to namePrefix filtering so the user can still pick the ESP32 and validate services after connect.
+        if (!isDomExceptionNamed(error, 'NotFoundError')) {
+          throw error;
+        }
+
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: nfcBleDeviceNamePrefix || 'ESP32' }],
+          optionalServices: serviceCandidates,
+        });
+      }
       setLastSuccessfulBlePhase('requestDevice');
+
+      if (device.name && nfcBleDeviceNamePrefix && !device.name.startsWith(nfcBleDeviceNamePrefix)) {
+        throw new Error(
+          `Selected device "${device.name}" does not match expected device prefix "${nfcBleDeviceNamePrefix}". Please select your ESP32 device.`
+        );
+      }
 
       if (!device.gatt) {
         throw new Error('Selected device does not expose a BLE GATT server.');
@@ -161,39 +201,13 @@ export function useNfcBleBridge() {
       const services = await device.gatt.getPrimaryServices();
       setLastSuccessfulBlePhase('discoverPrimaryServices');
 
-      const configuredService = services.find((service) => service.uuid.toLowerCase() === nfcBleServiceUuid);
+      const discoveredUuids = services.map((service) => service.uuid.toLowerCase());
+      const configuredService = services.find((service) => serviceCandidates.includes(service.uuid.toLowerCase()));
       if (!configuredService) {
         throw new Error(
-          `Configured service ${nfcBleServiceUuid} was not found on the selected device. Choose the ESP32 that exposes this service.`
+          `Expected BLE service(s) not found. Expected one of: ${serviceCandidates.join(', ')}. Discovered: ${discoveredUuids.join(', ') || 'none'}.`
         );
       }
-
-      setBlePhase('discoverReadableCharacteristics');
-      const configuredCharacteristics = await configuredService.getCharacteristics();
-      const discoveredReadableCharacteristics: NfcReadableCharacteristic[] = [];
-      const characteristicMap: Record<string, BluetoothRemoteGATTCharacteristicLike> = {};
-
-      for (const characteristic of configuredCharacteristics) {
-        if (!characteristic.properties.read) {
-          continue;
-        }
-
-        const id = `${configuredService.uuid}:${characteristic.uuid}`;
-        discoveredReadableCharacteristics.push({
-          id,
-          serviceUuid: configuredService.uuid,
-          characteristicUuid: characteristic.uuid,
-          label: `${configuredService.uuid.slice(0, 8)}... / ${characteristic.uuid.slice(0, 8)}...`,
-        });
-        characteristicMap[id] = characteristic;
-      }
-
-      if (discoveredReadableCharacteristics.length === 0) {
-        throw new Error(
-          `Service ${configuredService.uuid} is available, but no readable characteristics were found. Enable the read property on at least one characteristic in the ESP32 firmware.`
-        );
-      }
-      setLastSuccessfulBlePhase('discoverReadableCharacteristics');
 
       if (connectedDevice?.gatt?.connected) {
         connectedDevice.gatt.disconnect();
@@ -212,9 +226,9 @@ export function useNfcBleBridge() {
       setIsNfcConnected(true);
       setBlePhase('connected');
       setLastSuccessfulBlePhase('connected');
-      setAvailableNfcCharacteristics(discoveredReadableCharacteristics);
-      readableCharacteristicMapRef.current = characteristicMap;
-      setSelectedNfcCharacteristicId(discoveredReadableCharacteristics[0]?.id ?? null);
+      setAvailableNfcCharacteristics([]);
+      readableCharacteristicMapRef.current = {};
+      setSelectedNfcCharacteristicId(null);
       setNfcReadError(null);
       setConnectionError(null);
     } catch (error) {
