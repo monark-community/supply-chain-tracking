@@ -23,8 +23,19 @@ type TxFeedback = {
 
 export default function ScannerPage() {
   const { role, isConnected } = useWalletAuth();
-  const { isConnecting, isNfcConnected, nfcDeviceName, nfcDeviceId, connectionError, connectNfcDevice, disconnectNfcDevice } =
-    useNfcBleBridge();
+  const {
+    isConnecting,
+    isNfcConnected,
+    nfcDeviceName,
+    nfcDeviceId,
+    connectionError,
+    blePhase,
+    lastSuccessfulBlePhase,
+    lastBleErrorName,
+    lastBleErrorMessage,
+    connectNfcDevice,
+    disconnectNfcDevice,
+  } = useNfcBleBridge();
 
   const [transferLookup, setTransferLookup] = useState('');
   const [transferRecipient, setTransferRecipient] = useState('');
@@ -292,6 +303,14 @@ export default function ScannerPage() {
             ) : null}
 
             {connectionError ? <p className="text-sm text-red-600">{connectionError}</p> : null}
+
+            <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700">
+              <p className="font-semibold text-slate-900">BLE Diagnostics</p>
+              <p className="mt-1">Current phase: {blePhase}</p>
+              <p>Last successful phase: {lastSuccessfulBlePhase}</p>
+              <p>Last error name: {lastBleErrorName ?? 'None'}</p>
+              <p className="break-all">Last error details: {lastBleErrorMessage ?? 'None'}</p>
+            </div>
           </CardContent>
         </Card>
 
