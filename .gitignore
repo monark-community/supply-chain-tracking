@@ -38,6 +38,13 @@ dist/
 build/
 coverage/
 
+# Generated smart contract outputs
+services/smart-contracts/artifacts/
+services/smart-contracts/cache/
+
+# Generated IoT caches
+services/iot/blink/.cache/
+
 # Environment
 .env.*
 !.env.example

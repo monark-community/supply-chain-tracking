@@ -36,6 +36,10 @@ export type InitiateBatchTransferInput = {
   lookup: string;
   to: string;
 };
+export type InitiateBatchTransferByIdInput = {
+  batchId: number;
+  to: string;
+};
 
 export type InitiateBatchTransferResult = {
   chainId: number;
@@ -48,6 +52,9 @@ export type InitiateBatchTransferResult = {
 
 export type ReceiveTransferredBatchInput = {
   lookup: string;
+};
+export type ReceiveTransferredBatchByIdInput = {
+  batchId: number;
 };
 
 export type ReceiveTransferredBatchResult = {
@@ -260,25 +267,47 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
 export async function initiateBatchTransfer(
   input: InitiateBatchTransferInput
 ): Promise<InitiateBatchTransferResult> {
+  try {
+    const context = await createChainproofWriteContext();
+    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
+    return initiateBatchTransferByIdWithContext(context, { batchId, to: input.to });
+  } catch (error) {
+    throw mapWriteError(error);
+  }
+}
+
+async function initiateBatchTransferByIdWithContext(
+  context: ChainproofWriteContext,
+  input: InitiateBatchTransferByIdInput
+): Promise<InitiateBatchTransferResult> {
   const recipient = input.to.trim();
   if (!isAddress(recipient)) {
     throw new Error('Recipient wallet address is invalid.');
   }
+  const batchId = Math.floor(input.batchId);
+  if (!Number.isFinite(batchId) || batchId <= 0) {
+    throw new Error('Batch id is invalid.');
+  }
 
+  const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
+  await tx.wait();
+
+  return {
+    chainId: context.chainId,
+    contractAddress: context.contractAddress,
+    txHash: String(tx.hash),
+    account: context.account,
+    batchId,
+    to: recipient,
+  };
+}
+
+export async function initiateBatchTransferById(
+  input: InitiateBatchTransferByIdInput
+): Promise<InitiateBatchTransferResult> {
   try {
     const context = await createChainproofWriteContext();
-    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
-    const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
-    await tx.wait();
-
-    return {
-      chainId: context.chainId,
-      contractAddress: context.contractAddress,
-      txHash: String(tx.hash),
-      account: context.account,
-      batchId,
-      to: recipient,
-    };
+    return initiateBatchTransferByIdWithContext(context, input);
   } catch (error) {
     throw mapWriteError(error);
   }
@@ -290,16 +319,38 @@ export async function receiveTransferredBatch(
   try {
     const context = await createChainproofWriteContext();
     const batchId = await resolveBatchIdFromLookup(context, input.lookup);
-    const tx = await context.contract.receiveBatch(BigInt(batchId));
-    await tx.wait();
+    return receiveTransferredBatchByIdWithContext(context, { batchId });
+  } catch (error) {
+    throw mapWriteError(error);
+  }
+}
 
-    return {
-      chainId: context.chainId,
-      contractAddress: context.contractAddress,
-      txHash: String(tx.hash),
-      account: context.account,
-      batchId,
-    };
+async function receiveTransferredBatchByIdWithContext(
+  context: ChainproofWriteContext,
+  input: ReceiveTransferredBatchByIdInput
+): Promise<ReceiveTransferredBatchResult> {
+  const batchId = Math.floor(input.batchId);
+  if (!Number.isFinite(batchId) || batchId <= 0) {
+    throw new Error('Batch id is invalid.');
+  }
+  const tx = await context.contract.receiveBatch(BigInt(batchId));
+  await tx.wait();
+
+  return {
+    chainId: context.chainId,
+    contractAddress: context.contractAddress,
+    txHash: String(tx.hash),
+    account: context.account,
+    batchId,
+  };
+}
+
+export async function receiveTransferredBatchById(
+  input: ReceiveTransferredBatchByIdInput
+): Promise<ReceiveTransferredBatchResult> {
+  try {
+    const context = await createChainproofWriteContext();
+    return receiveTransferredBatchByIdWithContext(context, input);
   } catch (error) {
     throw mapWriteError(error);
   }

@@ -124,6 +124,12 @@ export async function readChainproofSummary(viewerAddress?: string) {
   };
 }
 
+export async function readPredictedNextBatchId(): Promise<number> {
+  const context = await createChainproofReadContext();
+  const batchCount = Number(await context.contract.batchCount());
+  return batchCount + 1;
+}
+
 export async function readBatchByTrackingOrId(lookup: string) {
   const context = await createChainproofReadContext();
   const trimmed = lookup.trim();
