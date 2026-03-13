@@ -94,13 +94,7 @@ export function Nav() {
                   Disconnect
                 </Button>
               </>
-            ) : (
-              <>
-                <Link href="/auth/login">
-                  <Button size="sm">Sign In</Button>
-                </Link>
-              </>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

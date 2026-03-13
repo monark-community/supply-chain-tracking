@@ -1,26 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Package, Wallet } from 'lucide-react';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
-import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
 
 export default function LoginPage() {
   const router = useRouter();
   const [privateKey, setPrivateKey] = useState('');
   const [showPrivateKey, setShowPrivateKey] = useState(false);
-  const [requestedRole, setRequestedRole] = useState<Exclude<AppRole, 'none'> | ''>('');
-  const [isAssigning, setIsAssigning] = useState(false);
   const [localError, setLocalError] = useState('');
-  const { connectWallet, assignMyRole, status, role, account, chainId, error } = useWalletAuth();
+  const { connectWallet, status, role, account, chainId, error } = useWalletAuth();
 
   const handleWalletLogin = async () => {
     setLocalError('');
@@ -35,25 +30,13 @@ export default function LoginPage() {
     }
   };
 
-  const handleAssignRole = async () => {
-    setLocalError('');
-    if (!requestedRole) {
-      setLocalError('Select a role before assigning.');
-      return;
-    }
-    try {
-      setIsAssigning(true);
-      await assignMyRole(requestedRole);
-    } catch {
-      setLocalError('Role assignment failed. Check wallet confirmation and retry.');
-    } finally {
-      setIsAssigning(false);
-    }
-  };
-
   useEffect(() => {
     if (role !== 'none' && status === 'connected') {
       router.push('/');
+      return;
+    }
+    if (status === 'unassigned_role' || (status === 'connected' && role === 'none')) {
+      router.push('/auth/assign-role');
     }
   }, [role, router, status]);
 
@@ -125,34 +108,6 @@ export default function LoginPage() {
                   RPC is on the wrong chain. Update your ChainProof configured network and retry.
                 </div>
               )}
-              {(status === 'unassigned_role' || role === 'none') && (
-                <div className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
-                  <p className="text-sm text-blue-900">
-                    This wallet has no role yet. Assign one now to enter the app.
-                  </p>
-                  <div className="space-y-2">
-                    <Label htmlFor="assign-role" className="text-sm font-medium text-blue-900">
-                      Assign role
-                    </Label>
-                    <Select value={requestedRole} onValueChange={(value) => setRequestedRole(value as Exclude<AppRole, 'none'>)}>
-                      <SelectTrigger id="assign-role" className="bg-white">
-                        <SelectValue placeholder="Select a role" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="producer">Producer - Create and manage batches</SelectItem>
-                        <SelectItem value="processor">Processor - Split, merge, and transform batches</SelectItem>
-                        <SelectItem value="warehouse">Warehouse - Receive, split, merge, and transfer custody</SelectItem>
-                        <SelectItem value="transporter">Transporter - Move shipments</SelectItem>
-                        <SelectItem value="customer">Customer - Verify batch authenticity</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button onClick={handleAssignRole} className="w-full" disabled={!requestedRole || isAssigning || status === 'connecting'}>
-                    {isAssigning ? 'Assigning Role...' : 'Assign Role On-Chain'}
-                  </Button>
-                </div>
-              )}
-
               <Button
                 onClick={handleWalletLogin}
                 className="w-full bg-blue-600 hover:bg-blue-700"
@@ -163,13 +118,9 @@ export default function LoginPage() {
               </Button>
             </div>
 
-            {/* Sign Up Link */}
             <div className="text-center">
               <p className="text-sm text-gray-600">
-                Need access?{' '}
-                <Link href="/auth/signup" className="font-medium text-blue-600 hover:text-blue-700">
-                  Sign up and assign role
-                </Link>
+                Sign in with your wallet private key to continue.
               </p>
             </div>
           </CardContent>
