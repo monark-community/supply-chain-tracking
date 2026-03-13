@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Factory, Package, Activity, TrendingUp, ArrowRightLeft, CheckCircle, Bluetooth } from 'lucide-react';
+import { Package, ArrowRightLeft, CheckCircle, Bluetooth } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,13 +26,6 @@ export function ProcessorDashboard() {
   const [loadingHardwareBatch, setLoadingHardwareBatch] = useState(false);
   const { isNfcConnected, isConnecting, nfcDeviceName, connectionError, connectNfcDevice, readActiveBatchIdFromHardware } =
     useNfcBleBridge();
-
-  const stats = [
-    { name: 'Batches in Processing', value: '9', icon: Factory, change: '4 waiting' },
-    { name: 'Received Today', value: '6', icon: Package, change: 'On schedule' },
-    { name: 'Processed This Month', value: '142', icon: Activity, change: '+12% vs last' },
-    { name: 'Quality Pass Rate', value: '98.5%', icon: TrendingUp, change: 'Excellent' },
-  ];
 
   const processingQueue = [
     { batch: 'BATCH-A1B2', product: 'Organic Coffee Beans', qty: '500 kg', status: 'Received', time: '2 hours ago' },
@@ -125,24 +118,6 @@ export function ProcessorDashboard() {
       </div>
 
       <ReadOnlyChainCard />
-
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Card key={stat.name}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-gray-600">{stat.name}</CardTitle>
-                <Icon className="h-4 w-4 text-gray-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-gray-900">{stat.value}</div>
-                <p className="mt-1 text-xs text-gray-600">{stat.change}</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
 
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
