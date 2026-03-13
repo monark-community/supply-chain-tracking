@@ -200,41 +200,6 @@ export function CustomerDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Customer Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="mb-2 flex items-center font-semibold text-green-700">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Look up batches by ID or tracking code</li>
-                <li>• View shipment journey</li>
-                <li>• Verify authenticity</li>
-                <li>• Check environmental data</li>
-                <li>• See custody history</li>
-                <li>• Receive transferred batches</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="mb-2 flex items-center font-semibold text-red-700">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create root batches</li>
-                <li>• Create batches</li>
-                <li>• Initiate transfers to others</li>
-                <li>• Log events</li>
-                <li>• Modify any data</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

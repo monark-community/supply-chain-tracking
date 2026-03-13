@@ -244,38 +244,6 @@ export function WarehouseDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Warehouse Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="font-semibold text-green-700 mb-2 flex items-center">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Receive batches into custody</li>
-                <li>• Split batches into child batches</li>
-                <li>• Merge multiple batches into one</li>
-                <li>• Transfer custody to next participant</li>
-                <li>• View full lineage and custody history</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-red-700 mb-2 flex items-center">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Harvest new root batches</li>
-                <li>• Transform batches into new processed form</li>
-                <li>• Assign roles to other accounts</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

@@ -304,39 +304,6 @@ export function ProcessorDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Processor Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="font-semibold text-green-700 mb-2 flex items-center">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Look up batches by ID or tracking code</li>
-                <li>• Receive shipments (take custody)</li>
-                <li>• Transfer shipments (pass custody)</li>
-                <li>• Split and merge batches</li>
-                <li>• Transform batches (processor only)</li>
-                <li>• View shipment history</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-red-700 mb-2 flex items-center">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create root batches</li>
-                <li>• Harvest root batches</li>
-                <li>• Assign participant roles</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

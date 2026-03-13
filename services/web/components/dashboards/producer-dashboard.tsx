@@ -198,38 +198,6 @@ export function ProducerDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Producer Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="font-semibold text-green-700 mb-2 flex items-center">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create production batches</li>
-                <li>• Initiate transfers to transporter, warehouse, or processor</li>
-                <li>• Log batch events (production, packaging)</li>
-                <li>• View batch journey and traceability</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-red-700 mb-2 flex items-center">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Receive shipments from others</li>
-                <li>• Log processing events</li>
-                <li>• Perform quality inspections</li>
-                <li>• Deliver to final destination</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

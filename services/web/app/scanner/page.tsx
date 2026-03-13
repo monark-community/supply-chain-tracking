@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { ArrowRightLeft, Bluetooth, CheckCircle, Package, Search, Waves } from 'lucide-react';
+import { ArrowRightLeft, Bluetooth, Package, Search, Waves } from 'lucide-react';
 import { harvestProducerBatch, initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
 import { readBatchByTrackingOrId, readPredictedNextBatchId } from '@/lib/chainproof-read';
 import type { AppRole } from '@/lib/wallet-auth';
@@ -439,16 +439,7 @@ export default function ScannerPage() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <CheckCircle className="mr-2 h-5 w-5 text-blue-600" />
-              Role Action
-            </CardTitle>
-            <CardDescription>
-              Batch creation and role actions run from NFC Console for the current BLE workflow.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>{renderRoleActions()}</CardContent>
+          <CardContent className="pt-6">{renderRoleActions()}</CardContent>
         </Card>
       </main>
     </div>

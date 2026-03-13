@@ -315,39 +315,6 @@ export function TransporterDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Transporter Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="font-semibold text-green-700 mb-2 flex items-center">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Look up batches by ID or tracking code</li>
-                <li>• Receive shipments (pickup)</li>
-                <li>• Deliver shipments (drop-off)</li>
-                <li>• View shipment details</li>
-                <li>• Track custody transfers</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-red-700 mb-2 flex items-center">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create root batches</li>
-                <li>• Log processing events</li>
-                <li>• Perform quality inspections</li>
-                <li>• Modify batch source data</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }
