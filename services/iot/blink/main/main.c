@@ -1,3 +1,4 @@
+#if 0 // BLE_DISABLED_TEMP
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -11,6 +12,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_check.h"
 #include "esp_timer.h"
 
 #include "driver/gpio.h"
@@ -131,7 +133,417 @@ static esp_err_t dht22_read(gpio_num_t pin, float *temp_c, float *humi_pct)
     *humi_pct = h;
     return ESP_OK;
 }
+#endif // BLE_DISABLED_TEMP
 
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+#include "nvs_flash.h"
+#include "esp_log.h"
+#include "esp_err.h"
+#include "esp_timer.h"
+
+#include "driver/gpio.h"
+#include "driver/i2c.h"
+#include "dht.h"
+
+#define DHT_GPIO              GPIO_NUM_4
+#define SAMPLE_PERIOD_MS      3000
+#define DHT_STARTUP_DELAY_MS  2000
+#define DHT_READ_RETRIES      3
+#define DHT_RETRY_DELAY_MS    30
+
+#define TEMP_MIN_ALLOWED_C    (10.0f)
+#define TEMP_MAX_ALLOWED_C    (30.0f)
+#define HUMI_MIN_ALLOWED_PCT  (5.0f)
+#define HUMI_MAX_ALLOWED_PCT  (50.0f)
+
+#define FLAG_OK        0x0
+#define FLAG_TEMP_OOR  0x1
+#define FLAG_HUMI_OOR  0x2
+
+#define PN532_I2C_PORT        I2C_NUM_0
+#define PN532_I2C_SDA_GPIO    GPIO_NUM_8
+#define PN532_I2C_SCL_GPIO    GPIO_NUM_9
+#define PN532_I2C_FREQ_HZ     100000
+#define PN532_I2C_ADDR_7BIT   0x24
+
+#define PN532_PREAMBLE        0x00
+#define PN532_STARTCODE1      0x00
+#define PN532_STARTCODE2      0xFF
+#define PN532_POSTAMBLE       0x00
+#define PN532_HOSTTOPN532     0xD4
+#define PN532_PN532TOHOST     0xD5
+
+#define PN532_CMD_SAMCONFIGURATION 0x14
+#define PN532_CMD_TGINITASTARGET   0x8C
+#define PN532_CMD_TGGETDATA        0x86
+#define PN532_CMD_TGSETDATA        0x8E
+
+static const char *TAG = "PN532_DHT22";
+
+typedef struct __attribute__((packed)) {
+    float temp_min;
+    float temp_max;
+    float humi_min;
+    float humi_max;
+    uint8_t flag2;
+    uint8_t has_batch;
+    uint32_t batch_id;
+    float latest_temp_c;
+    float latest_humi_pct;
+    uint32_t updated_ts_s;
+} payload_t;
+
+static payload_t g_payload;
+static bool g_initialized = false;
+static SemaphoreHandle_t g_lock;
+static char g_ndef_text[196];
+
+static uint8_t compute_flag(float t, float h)
+{
+    if (t < TEMP_MIN_ALLOWED_C || t > TEMP_MAX_ALLOWED_C) return FLAG_TEMP_OOR;
+    if (h < HUMI_MIN_ALLOWED_PCT || h > HUMI_MAX_ALLOWED_PCT) return FLAG_HUMI_OOR;
+    return FLAG_OK;
+}
+
+static esp_err_t dht22_read(gpio_num_t pin, float *temp_c, float *humi_pct)
+{
+    float h = NAN;
+    float t = NAN;
+
+    esp_err_t rc = dht_read_float_data(DHT_TYPE_AM2301, pin, &h, &t);
+    if (rc != ESP_OK) return rc;
+
+    if (fabsf(t) < 0.001f && fabsf(h) < 0.001f) return ESP_ERR_INVALID_RESPONSE;
+
+    *temp_c = t;
+    *humi_pct = h;
+    return ESP_OK;
+}
+
+static void update_payload(float t, float h)
+{
+    uint8_t flag = compute_flag(t, h);
+    uint32_t ts_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    if (!g_initialized) {
+        g_payload.temp_min = t;
+        g_payload.temp_max = t;
+        g_payload.humi_min = h;
+        g_payload.humi_max = h;
+        g_initialized = true;
+    } else {
+        if (t < g_payload.temp_min) g_payload.temp_min = t;
+        if (t > g_payload.temp_max) g_payload.temp_max = t;
+        if (h < g_payload.humi_min) g_payload.humi_min = h;
+        if (h > g_payload.humi_max) g_payload.humi_max = h;
+    }
+
+    g_payload.flag2 = flag;
+    g_payload.latest_temp_c = t;
+    g_payload.latest_humi_pct = h;
+    g_payload.updated_ts_s = ts_s;
+    xSemaphoreGive(g_lock);
+}
+
+static void refresh_ndef_payload(void)
+{
+    payload_t snap;
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    snap = g_payload;
+    xSemaphoreGive(g_lock);
+
+    snprintf(
+        g_ndef_text,
+        sizeof(g_ndef_text),
+        "temp_c=%.2f;humi_pct=%.2f;flag=%u;batch_id=%lu;ts=%lu",
+        snap.latest_temp_c,
+        snap.latest_humi_pct,
+        (unsigned int)snap.flag2,
+        (unsigned long)snap.batch_id,
+        (unsigned long)snap.updated_ts_s
+    );
+}
+
+static esp_err_t pn532_i2c_init(void)
+{
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = PN532_I2C_SDA_GPIO,
+        .scl_io_num = PN532_I2C_SCL_GPIO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = PN532_I2C_FREQ_HZ,
+    };
+
+    esp_err_t err = i2c_param_config(PN532_I2C_PORT, &conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_param_config failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = i2c_driver_install(PN532_I2C_PORT, conf.mode, 0, 0, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t pn532_write_raw(const uint8_t *data, size_t len)
+{
+    return i2c_master_write_to_device(PN532_I2C_PORT, PN532_I2C_ADDR_7BIT, data, len, pdMS_TO_TICKS(200));
+}
+
+static esp_err_t pn532_read_raw(uint8_t *data, size_t len)
+{
+    return i2c_master_read_from_device(PN532_I2C_PORT, PN532_I2C_ADDR_7BIT, data, len, pdMS_TO_TICKS(200));
+}
+
+static esp_err_t pn532_wait_ready(uint32_t timeout_ms)
+{
+    uint32_t elapsed = 0;
+    while (elapsed < timeout_ms) {
+        uint8_t status = 0;
+        if (pn532_read_raw(&status, 1) == ESP_OK && status == 0x01) {
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+        elapsed += 10;
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t pn532_send_command(uint8_t cmd, const uint8_t *payload, size_t payload_len)
+{
+    uint8_t frame[96];
+    const size_t data_len = payload_len + 2; // TFI + CMD + payload
+    if (data_len > 0xFF || data_len + 8 > sizeof(frame)) return ESP_ERR_INVALID_SIZE;
+
+    size_t idx = 0;
+    frame[idx++] = 0x00; // I2C host preamble byte
+    frame[idx++] = PN532_PREAMBLE;
+    frame[idx++] = PN532_STARTCODE1;
+    frame[idx++] = PN532_STARTCODE2;
+    frame[idx++] = (uint8_t)data_len;
+    frame[idx++] = (uint8_t)(~data_len + 1);
+    frame[idx++] = PN532_HOSTTOPN532;
+    frame[idx++] = cmd;
+    for (size_t i = 0; i < payload_len; i++) {
+        frame[idx++] = payload[i];
+    }
+
+    uint8_t dcs = (uint8_t)(PN532_HOSTTOPN532 + cmd);
+    for (size_t i = 0; i < payload_len; i++) dcs = (uint8_t)(dcs + payload[i]);
+    frame[idx++] = (uint8_t)(~dcs + 1);
+    frame[idx++] = PN532_POSTAMBLE;
+
+    esp_err_t err = pn532_write_raw(frame, idx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "pn532 write failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    return err;
+}
+
+static esp_err_t pn532_read_frame(uint8_t *out, size_t out_len, size_t *actual)
+{
+    uint8_t buf[96] = {0};
+    esp_err_t err = pn532_read_raw(buf, sizeof(buf));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "pn532 read frame failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // Skip first status byte in I2C read stream.
+    const uint8_t *p = &buf[1];
+    if (p[0] != PN532_PREAMBLE || p[1] != PN532_STARTCODE1 || p[2] != PN532_STARTCODE2) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    uint8_t len = p[3];
+    if ((uint8_t)(len + p[4]) != 0x00) return ESP_ERR_INVALID_CRC;
+    if ((size_t)len > out_len) return ESP_ERR_INVALID_SIZE;
+
+    memcpy(out, &p[5], len);
+    *actual = len;
+    return ESP_OK;
+}
+
+static esp_err_t pn532_exchange(uint8_t cmd, const uint8_t *payload, size_t payload_len, uint8_t *resp, size_t resp_len, size_t *resp_actual)
+{
+    esp_err_t err = pn532_send_command(cmd, payload, payload_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "send cmd failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = pn532_wait_ready(1000);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wait ready timeout: %s", esp_err_to_name(err));
+        return err;
+    }
+    return pn532_read_frame(resp, resp_len, resp_actual);
+}
+
+static esp_err_t pn532_sam_config(void)
+{
+    // Normal mode, timeout 1s, use IRQ pin.
+    const uint8_t sam_cfg[] = {0x01, 0x14, 0x01};
+    uint8_t resp[64];
+    size_t resp_len = 0;
+    esp_err_t err = pn532_exchange(PN532_CMD_SAMCONFIGURATION, sam_cfg, sizeof(sam_cfg), resp, sizeof(resp), &resp_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SAM config failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    return err;
+}
+
+static esp_err_t pn532_tg_init_as_target(void)
+{
+    // Minimal Type A target init payload.
+    const uint8_t target_params[] = {
+        0x00,                         // MODE: passive only
+        0x08, 0x00,                   // SENS_RES
+        0x12, 0x34, 0x56,             // NFCID1t
+        0x20,                         // SEL_RES
+        0x00, 0x00, 0x00,             // POL_RES
+        0x00, 0x00,                   // NFCID3t length=0
+        0x00, 0x00,                   // historical bytes length=0
+    };
+
+    uint8_t resp[96];
+    size_t resp_len = 0;
+    return pn532_exchange(PN532_CMD_TGINITASTARGET, target_params, sizeof(target_params), resp, sizeof(resp), &resp_len);
+}
+
+static esp_err_t pn532_tg_get_data(uint8_t *buf, size_t buf_len, size_t *actual)
+{
+    uint8_t resp[96];
+    size_t resp_len = 0;
+    esp_err_t err = pn532_exchange(PN532_CMD_TGGETDATA, NULL, 0, resp, sizeof(resp), &resp_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "tggetdata failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (resp_len < 2 || resp[0] != PN532_PN532TOHOST || resp[1] != (PN532_CMD_TGGETDATA + 1)) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    size_t payload_len = resp_len - 2;
+    if (payload_len > buf_len) return ESP_ERR_INVALID_SIZE;
+    memcpy(buf, &resp[2], payload_len);
+    *actual = payload_len;
+    return ESP_OK;
+}
+
+static esp_err_t pn532_tg_set_data(const uint8_t *buf, size_t len)
+{
+    uint8_t resp[64];
+    size_t resp_len = 0;
+    esp_err_t err = pn532_exchange(PN532_CMD_TGSETDATA, buf, len, resp, sizeof(resp), &resp_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "tgsetdata failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    return err;
+}
+
+static void sensor_task(void *param)
+{
+    (void)param;
+
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << DHT_GPIO),
+        .mode = GPIO_MODE_INPUT_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(DHT_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(DHT_STARTUP_DELAY_MS));
+
+    while (1) {
+        float t = NAN, h = NAN;
+        esp_err_t err = ESP_FAIL;
+        int last_level = gpio_get_level(DHT_GPIO);
+        for (int attempt = 1; attempt <= DHT_READ_RETRIES; attempt++) {
+            err = dht22_read(DHT_GPIO, &t, &h);
+            if (err == ESP_OK) break;
+            last_level = gpio_get_level(DHT_GPIO);
+            if (attempt < DHT_READ_RETRIES) vTaskDelay(pdMS_TO_TICKS(DHT_RETRY_DELAY_MS));
+        }
+
+        if (err == ESP_OK) {
+            update_payload(t, h);
+            refresh_ndef_payload();
+            ESP_LOGI(TAG, "Sample updated: %s", g_ndef_text);
+        } else {
+            ESP_LOGW(TAG, "DHT22 read failed after %d retries: %s (line_level=%d gpio=%d)",
+                     DHT_READ_RETRIES, esp_err_to_name(err), last_level, (int)DHT_GPIO);
+        }
+        vTaskDelay(pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
+    }
+}
+
+static void nfc_task(void *param)
+{
+    (void)param;
+    uint8_t rx[96];
+    size_t rx_len = 0;
+
+    while (1) {
+        if (pn532_tg_init_as_target() != ESP_OK) {
+            ESP_LOGW(TAG, "PN532 target init failed, retrying...");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
+        ESP_LOGI(TAG, "NFC target armed, waiting for phone scan...");
+        if (pn532_tg_get_data(rx, sizeof(rx), &rx_len) != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        refresh_ndef_payload();
+        ESP_LOGI(TAG, "Phone scan detected, sending payload: %s", g_ndef_text);
+        (void)pn532_tg_set_data((const uint8_t *)g_ndef_text, strlen(g_ndef_text));
+    }
+}
+
+void app_main(void)
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    g_lock = xSemaphoreCreateMutex();
+    if (!g_lock) {
+        ESP_LOGE(TAG, "Failed to create mutex");
+        return;
+    }
+
+    memset(&g_payload, 0, sizeof(g_payload));
+    refresh_ndef_payload();
+
+    ESP_LOGI(TAG, "BLE transport disabled (commented out). Starting PN532 NFC mode.");
+    ESP_ERROR_CHECK(pn532_i2c_init());
+    ESP_ERROR_CHECK(pn532_sam_config());
+
+    xTaskCreate(sensor_task, "sensor", 4096, NULL, 5, NULL);
+    xTaskCreate(nfc_task, "nfc", 6144, NULL, 5, NULL);
+}
+
+#if 0 // BLE_DISABLED_TEMP_REMAINDER
 static uint8_t compute_flag(float t, float h)
 {
     if (t < TEMP_MIN_ALLOWED_C || t > TEMP_MAX_ALLOWED_C) return FLAG_TEMP_OOR;
@@ -664,3 +1076,4 @@ void app_main(void)
     xTaskCreate(sensor_task, "sensor", 4096, NULL, 5, NULL);
 #endif
 }
+#endif // BLE_DISABLED_TEMP_REMAINDER
