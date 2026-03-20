@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Package, Wallet } from 'lucide-react';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
 import { shortenAddress } from '@/lib/wallet-auth';
@@ -53,7 +52,7 @@ export default function LoginPage() {
 
         <Card className="shadow-lg">
           <CardHeader className="space-y-2 text-center">
-            <CardTitle className="text-2xl">Sign In With Private Key</CardTitle>
+            <CardTitle className="text-2xl">Sign In</CardTitle>
             <CardDescription>
               Your dashboard access is determined by your role assigned on-chain.
             </CardDescription>
@@ -69,15 +68,9 @@ export default function LoginPage() {
               <div className="rounded-lg border-2 border-dashed border-blue-200 bg-blue-50 p-6 text-center">
                 <Wallet className="mx-auto h-12 w-12 text-blue-600" />
                 <p className="mt-2 text-sm font-medium text-gray-900">Enter your wallet private key</p>
-                <p className="mt-1 text-xs text-gray-600">
-                  Manual auth mode reads your role from ChainProof on-chain roles.
-                </p>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="login-private-key" className="text-sm font-medium">
-                  Private key
-                </Label>
                 <div className="flex gap-2">
                   <Input
                     id="login-private-key"
@@ -117,30 +110,8 @@ export default function LoginPage() {
                 {status === 'connecting' ? 'Signing In...' : 'Sign In'}
               </Button>
             </div>
-
-            <div className="text-center">
-              <p className="text-sm text-gray-600">
-                Sign in with your wallet private key to continue.
-              </p>
-            </div>
           </CardContent>
         </Card>
-
-        {/* Footer Info */}
-        <div className="mt-8 grid grid-cols-3 gap-4 text-center text-sm">
-          <div>
-            <div className="text-2xl font-bold text-gray-900">100%</div>
-            <div className="text-xs text-gray-600">Secure</div>
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-gray-900">24/7</div>
-            <div className="text-xs text-gray-600">Support</div>
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-gray-900">∞</div>
-            <div className="text-xs text-gray-600">Traceable</div>
-          </div>
-        </div>
 
         {/* Terms */}
         <p className="mt-6 text-center text-xs text-gray-500">

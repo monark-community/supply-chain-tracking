@@ -3,18 +3,24 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Package, MapPin, FileText, LayoutDashboard, QrCode } from 'lucide-react';
+import { Package, MapPin, LayoutDashboard, QrCode } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { useWalletAuth } from './auth/wallet-auth-provider';
 import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
+
+const CHANGEABLE_ROLES: Array<Exclude<AppRole, 'none' | 'processor' | 'customer'>> = [
+  'producer',
+  'warehouse',
+  'transporter',
+];
+
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Batches', href: '/batches', icon: MapPin },
   { name: 'NFC Console', href: '/scanner', icon: QrCode },
-  { name: 'Audit Trail', href: '/audit', icon: FileText },
 ];
 
 export function Nav() {
@@ -25,6 +31,7 @@ export function Nav() {
 
   const handleChangeRole = async () => {
     if (!nextRole) return;
+    if (!CHANGEABLE_ROLES.includes(nextRole as (typeof CHANGEABLE_ROLES)[number])) return;
     try {
       setIsChangingRole(true);
       await assignMyRole(nextRole);
@@ -80,10 +87,8 @@ export function Nav() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="producer">Producer</SelectItem>
-                      <SelectItem value="processor">Processor</SelectItem>
                       <SelectItem value="warehouse">Warehouse</SelectItem>
                       <SelectItem value="transporter">Transporter</SelectItem>
-                      <SelectItem value="customer">Customer</SelectItem>
                     </SelectContent>
                   </Select>
                   <Button size="sm" variant="outline" onClick={() => void handleChangeRole()} disabled={!nextRole || isChangingRole}>

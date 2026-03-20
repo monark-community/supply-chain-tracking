@@ -122,7 +122,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       const session = await restoreManualWalletSession();
       if (!session) {
         setStatus('disconnected');
-        setError('No active wallet session. Sign in with a private key first.');
+        setError('No active wallet session. Sign in first.');
         return;
       }
       try {

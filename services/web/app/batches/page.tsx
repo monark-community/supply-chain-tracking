@@ -221,6 +221,11 @@ export default function BatchesPage() {
       batch.product.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const handleStopTrackingBatch = (batchId: string) => {
+    setBatches((current) => current.filter((batch) => batch.id !== batchId));
+    setSelectedBatch((current) => (current?.id === batchId ? null : current));
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Nav />
@@ -371,9 +376,19 @@ export default function BatchesPage() {
                         </div>
                         <p className="mt-1 text-sm text-gray-600">{batch.product}</p>
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>
-                        View Details
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>
+                          View Details
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                          onClick={() => handleStopTrackingBatch(batch.id)}
+                        >
+                          Stop Tracking Batch
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -11,6 +11,12 @@ import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
 import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
 
+const ASSIGNABLE_ROLES: Array<Exclude<AppRole, 'none' | 'processor' | 'customer'>> = [
+  'producer',
+  'warehouse',
+  'transporter',
+];
+
 export default function AssignRolePage() {
   const router = useRouter();
   const [requestedRole, setRequestedRole] = useState<Exclude<AppRole, 'none'> | ''>('');
@@ -22,6 +28,10 @@ export default function AssignRolePage() {
     setLocalError('');
     if (!requestedRole) {
       setLocalError('Select a role before assigning.');
+      return;
+    }
+    if (!ASSIGNABLE_ROLES.includes(requestedRole as (typeof ASSIGNABLE_ROLES)[number])) {
+      setLocalError('Selected role is temporarily unavailable.');
       return;
     }
     try {
@@ -101,10 +111,8 @@ export default function AssignRolePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="producer">Producer - Create and manage batches</SelectItem>
-                  <SelectItem value="processor">Processor - Split, merge, and transform batches</SelectItem>
                   <SelectItem value="warehouse">Warehouse - Receive, split, merge, and transfer custody</SelectItem>
                   <SelectItem value="transporter">Transporter - Move shipments</SelectItem>
-                  <SelectItem value="customer">Customer - Verify batch authenticity</SelectItem>
                 </SelectContent>
               </Select>
             </div>
