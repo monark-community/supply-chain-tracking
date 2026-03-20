@@ -183,11 +183,22 @@ static esp_err_t dht22_read(gpio_num_t pin, float *temp_c, float *humi_pct)
 #define PN532_PN532TOHOST     0xD5
 
 #define PN532_CMD_SAMCONFIGURATION 0x14
+#define PN532_CMD_GETFIRMWAREVERSION 0x02
 #define PN532_CMD_TGINITASTARGET   0x8C
 #define PN532_CMD_TGGETDATA        0x86
 #define PN532_CMD_TGSETDATA        0x8E
 
+#define PN532_ACK_FRAME_LEN        6
+#define PN532_MAX_RETRIES          3
+#define PN532_INIT_RETRY_DELAY_MS  2000
+#define PN532_FALLBACK_I2C_HZ      50000
+#define SCAN_DEBOUNCE_MS           500
+#define SCAN_REPEAT_WINDOW_MS      1500
+
 static const char *TAG = "PN532_DHT22";
+static const uint8_t PN532_ACK_FRAME[PN532_ACK_FRAME_LEN] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
+static uint8_t g_pn532_addr = PN532_I2C_ADDR_7BIT;
+static uint32_t g_i2c_clk_hz = PN532_I2C_FREQ_HZ;
 
 typedef struct __attribute__((packed)) {
     float temp_min;
@@ -206,6 +217,9 @@ static payload_t g_payload;
 static bool g_initialized = false;
 static SemaphoreHandle_t g_lock;
 static char g_ndef_text[196];
+static int64_t g_last_scan_ts_us = 0;
+static uint8_t g_last_scan_frame[16];
+static size_t g_last_scan_frame_len = 0;
 
 static uint8_t compute_flag(float t, float h)
 {
@@ -282,9 +296,10 @@ static esp_err_t pn532_i2c_init(void)
         .scl_io_num = PN532_I2C_SCL_GPIO,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = PN532_I2C_FREQ_HZ,
+        .master.clk_speed = g_i2c_clk_hz,
     };
 
+    (void)i2c_driver_delete(PN532_I2C_PORT);
     esp_err_t err = i2c_param_config(PN532_I2C_PORT, &conf);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2c_param_config failed: %s", esp_err_to_name(err));
@@ -300,12 +315,78 @@ static esp_err_t pn532_i2c_init(void)
 
 static esp_err_t pn532_write_raw(const uint8_t *data, size_t len)
 {
-    return i2c_master_write_to_device(PN532_I2C_PORT, PN532_I2C_ADDR_7BIT, data, len, pdMS_TO_TICKS(200));
+    return i2c_master_write_to_device(PN532_I2C_PORT, g_pn532_addr, data, len, pdMS_TO_TICKS(200));
 }
 
 static esp_err_t pn532_read_raw(uint8_t *data, size_t len)
 {
-    return i2c_master_read_from_device(PN532_I2C_PORT, PN532_I2C_ADDR_7BIT, data, len, pdMS_TO_TICKS(200));
+    return i2c_master_read_from_device(PN532_I2C_PORT, g_pn532_addr, data, len, pdMS_TO_TICKS(200));
+}
+
+static void pn532_log_bytes(const char *label, const uint8_t *buf, size_t len)
+{
+    char line[192];
+    size_t max = len > 20 ? 20 : len;
+    int off = snprintf(line, sizeof(line), "%s (%uB):", label, (unsigned)len);
+    for (size_t i = 0; i < max && off > 0 && off < (int)sizeof(line) - 4; i++) {
+        off += snprintf(&line[off], sizeof(line) - (size_t)off, " %02X", buf[i]);
+    }
+    ESP_LOGW(TAG, "%s%s", line, len > max ? " ..." : "");
+}
+
+static void pn532_log_i2c_line_levels(const char *stage)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << PN532_I2C_SDA_GPIO) | (1ULL << PN532_I2C_SCL_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    (void)gpio_config(&io);
+
+    int sda = gpio_get_level(PN532_I2C_SDA_GPIO);
+    int scl = gpio_get_level(PN532_I2C_SCL_GPIO);
+    ESP_LOGI(TAG, "%s: I2C line levels SDA=%d SCL=%d (expect 1/1 idle)", stage, sda, scl);
+    if (sda == 0 || scl == 0) {
+        ESP_LOGW(TAG, "I2C line held low before transfer. Check pull-ups/wiring/shorts.");
+    }
+}
+
+static esp_err_t i2c_probe_addr(uint8_t addr7)
+{
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    if (!cmd) return ESP_ERR_NO_MEM;
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (addr7 << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_stop(cmd);
+    esp_err_t err = i2c_master_cmd_begin(PN532_I2C_PORT, cmd, pdMS_TO_TICKS(200));
+    i2c_cmd_link_delete(cmd);
+    return err;
+}
+
+static int pn532_scan_i2c_bus(uint8_t *found, size_t found_cap)
+{
+    int count = 0;
+    ESP_LOGI(TAG, "Scanning I2C bus for ACK addresses...");
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        if (i2c_probe_addr(addr) == ESP_OK) {
+            ESP_LOGI(TAG, "I2C device ACK at 0x%02X", addr);
+            if ((size_t)count < found_cap) {
+                found[count] = addr;
+            }
+            count++;
+        }
+    }
+    if (count == 0) {
+        ESP_LOGW(TAG, "No I2C ACK devices detected.");
+    }
+    return count;
+}
+
+static esp_err_t pn532_probe_device(void)
+{
+    return i2c_probe_addr(g_pn532_addr);
 }
 
 static esp_err_t pn532_wait_ready(uint32_t timeout_ms)
@@ -313,13 +394,23 @@ static esp_err_t pn532_wait_ready(uint32_t timeout_ms)
     uint32_t elapsed = 0;
     while (elapsed < timeout_ms) {
         uint8_t status = 0;
-        if (pn532_read_raw(&status, 1) == ESP_OK && status == 0x01) {
-            return ESP_OK;
-        }
+        if (pn532_read_raw(&status, 1) == ESP_OK && status == 0x01) return ESP_OK;
         vTaskDelay(pdMS_TO_TICKS(10));
         elapsed += 10;
     }
     return ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t pn532_read_ack_frame(void)
+{
+    uint8_t ack[PN532_ACK_FRAME_LEN + 1] = {0};
+    esp_err_t err = pn532_read_raw(ack, sizeof(ack));
+    if (err != ESP_OK) return err;
+    if (memcmp(&ack[1], PN532_ACK_FRAME, PN532_ACK_FRAME_LEN) != 0) {
+        pn532_log_bytes("Unexpected ACK frame", ack, sizeof(ack));
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return ESP_OK;
 }
 
 static esp_err_t pn532_send_command(uint8_t cmd, const uint8_t *payload, size_t payload_len)
@@ -356,40 +447,112 @@ static esp_err_t pn532_send_command(uint8_t cmd, const uint8_t *payload, size_t 
 
 static esp_err_t pn532_read_frame(uint8_t *out, size_t out_len, size_t *actual)
 {
-    uint8_t buf[96] = {0};
-    esp_err_t err = pn532_read_raw(buf, sizeof(buf));
+    uint8_t raw[96] = {0};
+    esp_err_t err = pn532_read_raw(raw, sizeof(raw));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "pn532 read frame failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    // Skip first status byte in I2C read stream.
-    const uint8_t *p = &buf[1];
+    if (raw[0] != 0x01) {
+        ESP_LOGW(TAG, "Frame status byte not ready: 0x%02X", raw[0]);
+    }
+
+    const uint8_t *p = &raw[1];
     if (p[0] != PN532_PREAMBLE || p[1] != PN532_STARTCODE1 || p[2] != PN532_STARTCODE2) {
+        pn532_log_bytes("Bad frame header", raw, 12);
         return ESP_ERR_INVALID_RESPONSE;
     }
     uint8_t len = p[3];
-    if ((uint8_t)(len + p[4]) != 0x00) return ESP_ERR_INVALID_CRC;
+    uint8_t lcs = p[4];
+    if ((uint8_t)(len + lcs) != 0x00) {
+        ESP_LOGW(TAG, "LEN/LCS mismatch len=0x%02X lcs=0x%02X", len, lcs);
+        return ESP_ERR_INVALID_CRC;
+    }
+    if (len < 1) return ESP_ERR_INVALID_RESPONSE;
     if ((size_t)len > out_len) return ESP_ERR_INVALID_SIZE;
 
     memcpy(out, &p[5], len);
+    uint8_t dcs = p[5 + len];
+    uint8_t post = p[6 + len];
+    if (post != PN532_POSTAMBLE) {
+        ESP_LOGW(TAG, "Bad postamble: 0x%02X", post);
+        pn532_log_bytes("Frame prefix", raw, 20);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    uint8_t sum = 0;
+    for (size_t i = 0; i < len; i++) {
+        sum = (uint8_t)(sum + out[i]);
+    }
+    if ((uint8_t)(sum + dcs) != 0x00) {
+        ESP_LOGW(TAG, "DCS mismatch sum=0x%02X dcs=0x%02X", sum, dcs);
+        pn532_log_bytes("Frame prefix", raw, 24);
+        return ESP_ERR_INVALID_CRC;
+    }
+
     *actual = len;
     return ESP_OK;
 }
 
 static esp_err_t pn532_exchange(uint8_t cmd, const uint8_t *payload, size_t payload_len, uint8_t *resp, size_t resp_len, size_t *resp_actual)
 {
-    esp_err_t err = pn532_send_command(cmd, payload, payload_len);
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= PN532_MAX_RETRIES; attempt++) {
+        err = pn532_send_command(cmd, payload, payload_len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "send cmd failed attempt=%d err=%s", attempt, esp_err_to_name(err));
+            continue;
+        }
+
+        err = pn532_wait_ready(1000);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "wait ready(ack) timeout attempt=%d err=%s", attempt, esp_err_to_name(err));
+            continue;
+        }
+
+        err = pn532_read_ack_frame();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "ack read failed attempt=%d err=%s", attempt, esp_err_to_name(err));
+            continue;
+        }
+
+        err = pn532_wait_ready(1000);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "wait ready(resp) timeout attempt=%d err=%s", attempt, esp_err_to_name(err));
+            continue;
+        }
+
+        err = pn532_read_frame(resp, resp_len, resp_actual);
+        if (err == ESP_OK) return ESP_OK;
+
+        ESP_LOGW(TAG, "response parse failed attempt=%d err=%s", attempt, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return err;
+}
+
+static esp_err_t pn532_get_firmware_version(uint32_t *fw_version)
+{
+    uint8_t resp[64];
+    size_t resp_len = 0;
+    esp_err_t err = pn532_exchange(PN532_CMD_GETFIRMWAREVERSION, NULL, 0, resp, sizeof(resp), &resp_len);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "send cmd failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "GetFirmwareVersion failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = pn532_wait_ready(1000);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "wait ready timeout: %s", esp_err_to_name(err));
-        return err;
+    if (resp_len < 6 || resp[0] != PN532_PN532TOHOST || resp[1] != (PN532_CMD_GETFIRMWAREVERSION + 1)) {
+        pn532_log_bytes("GetFirmwareVersion unexpected response", resp, resp_len);
+        return ESP_ERR_INVALID_RESPONSE;
     }
-    return pn532_read_frame(resp, resp_len, resp_actual);
+
+    *fw_version = ((uint32_t)resp[2] << 24)
+                | ((uint32_t)resp[3] << 16)
+                | ((uint32_t)resp[4] << 8)
+                | (uint32_t)resp[5];
+    ESP_LOGI(TAG, "PN532 firmware IC=0x%02X Ver=%u.%u Support=0x%02X",
+             resp[2], (unsigned int)resp[3], (unsigned int)resp[4], resp[5]);
+    return ESP_OK;
 }
 
 static esp_err_t pn532_sam_config(void)
@@ -455,6 +618,49 @@ static esp_err_t pn532_tg_set_data(const uint8_t *buf, size_t len)
     return err;
 }
 
+static bool nfc_is_valid_scan_data(const uint8_t *rx, size_t rx_len)
+{
+    if (!rx || rx_len == 0) return false;
+
+    bool all_zero = true;
+    for (size_t i = 0; i < rx_len; i++) {
+        if (rx[i] != 0x00) {
+            all_zero = false;
+            break;
+        }
+    }
+    if (all_zero) return false;
+
+    // PN532 target mode often returns status-only frames when no initiator payload exists.
+    if (rx_len == 1) return false;
+
+    // Status + empty marker pattern observed on idle loops.
+    if (rx_len == 2 && rx[0] == 0x00 && rx[1] == 0x00) return false;
+
+    return true;
+}
+
+static bool nfc_is_duplicate_scan(const uint8_t *rx, size_t rx_len, int64_t now_us)
+{
+    const int64_t elapsed_ms = (g_last_scan_ts_us == 0) ? INT64_MAX : ((now_us - g_last_scan_ts_us) / 1000);
+
+    size_t fp_len = rx_len;
+    if (fp_len > sizeof(g_last_scan_frame)) fp_len = sizeof(g_last_scan_frame);
+    bool same_fingerprint = (fp_len == g_last_scan_frame_len) && (memcmp(rx, g_last_scan_frame, fp_len) == 0);
+
+    if (elapsed_ms >= 0 && elapsed_ms < SCAN_DEBOUNCE_MS) return true;
+    if (same_fingerprint && elapsed_ms >= 0 && elapsed_ms < SCAN_REPEAT_WINDOW_MS) return true;
+
+    return false;
+}
+
+static void nfc_record_scan(const uint8_t *rx, size_t rx_len, int64_t now_us)
+{
+    g_last_scan_ts_us = now_us;
+    g_last_scan_frame_len = rx_len > sizeof(g_last_scan_frame) ? sizeof(g_last_scan_frame) : rx_len;
+    memcpy(g_last_scan_frame, rx, g_last_scan_frame_len);
+}
+
 static void sensor_task(void *param)
 {
     (void)param;
@@ -512,6 +718,19 @@ static void nfc_task(void *param)
             continue;
         }
 
+        if (!nfc_is_valid_scan_data(rx, rx_len)) {
+            ESP_LOGD(TAG, "Ignoring non-scan TgGetData frame len=%u first=0x%02X",
+                     (unsigned int)rx_len, rx_len > 0 ? rx[0] : 0x00);
+            continue;
+        }
+
+        int64_t now_us = esp_timer_get_time();
+        if (nfc_is_duplicate_scan(rx, rx_len, now_us)) {
+            ESP_LOGD(TAG, "Ignoring duplicate/debounced scan frame len=%u", (unsigned int)rx_len);
+            continue;
+        }
+        nfc_record_scan(rx, rx_len, now_us);
+
         refresh_ndef_payload();
         ESP_LOGI(TAG, "Phone scan detected, sending payload: %s", g_ndef_text);
         (void)pn532_tg_set_data((const uint8_t *)g_ndef_text, strlen(g_ndef_text));
@@ -536,8 +755,67 @@ void app_main(void)
     refresh_ndef_payload();
 
     ESP_LOGI(TAG, "BLE transport disabled (commented out). Starting PN532 NFC mode.");
+    ESP_LOGI(TAG, "PN532 checklist: board in I2C mode, SDA/SCL pull-ups present, common GND.");
+    ESP_LOGI(TAG, "PN532 config addr=0x%02X sda=%d scl=%d freq=%lu",
+             g_pn532_addr, (int)PN532_I2C_SDA_GPIO, (int)PN532_I2C_SCL_GPIO, (unsigned long)g_i2c_clk_hz);
+
+    pn532_log_i2c_line_levels("pre-init");
     ESP_ERROR_CHECK(pn532_i2c_init());
-    ESP_ERROR_CHECK(pn532_sam_config());
+
+    uint8_t found_addrs[16] = {0};
+    int found_count = pn532_scan_i2c_bus(found_addrs, sizeof(found_addrs));
+    if (found_count == 0 && g_i2c_clk_hz != PN532_FALLBACK_I2C_HZ) {
+        ESP_LOGW(TAG, "No ACK at %lu Hz. Retrying scan at fallback %d Hz.",
+                 (unsigned long)g_i2c_clk_hz, PN532_FALLBACK_I2C_HZ);
+        g_i2c_clk_hz = PN532_FALLBACK_I2C_HZ;
+        ESP_ERROR_CHECK(pn532_i2c_init());
+        found_count = pn532_scan_i2c_bus(found_addrs, sizeof(found_addrs));
+    }
+    if (found_count > 0) {
+        bool configured_found = false;
+        for (int i = 0; i < found_count && i < (int)sizeof(found_addrs); i++) {
+            if (found_addrs[i] == g_pn532_addr) {
+                configured_found = true;
+                break;
+            }
+        }
+        if (!configured_found && found_count == 1) {
+            g_pn532_addr = found_addrs[0];
+            ESP_LOGW(TAG, "Configured addr not found; auto-selecting sole ACK address 0x%02X", g_pn532_addr);
+        } else if (!configured_found) {
+            ESP_LOGW(TAG, "Configured addr 0x%02X not detected. Check PN532_I2C_ADDR_7BIT.", g_pn532_addr);
+        }
+    }
+
+    esp_err_t probe = pn532_probe_device();
+    if (probe != ESP_OK) {
+        ESP_LOGW(TAG, "PN532 probe did not ACK on 0x%02X: %s", g_pn532_addr, esp_err_to_name(probe));
+    } else {
+        ESP_LOGI(TAG, "PN532 probe ACK received on 0x%02X", g_pn532_addr);
+    }
+
+    while (1) {
+        uint32_t fw = 0;
+        esp_err_t fw_err = pn532_get_firmware_version(&fw);
+        if (fw_err == ESP_OK) {
+            ESP_LOGI(TAG, "PN532 firmware query successful: 0x%08lX", (unsigned long)fw);
+            break;
+        }
+        pn532_log_i2c_line_levels("fw-retry");
+        ESP_LOGW(TAG, "Firmware query failed (%s), retrying in %d ms",
+                 esp_err_to_name(fw_err), PN532_INIT_RETRY_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(PN532_INIT_RETRY_DELAY_MS));
+    }
+
+    while (1) {
+        esp_err_t sam_err = pn532_sam_config();
+        if (sam_err == ESP_OK) break;
+        pn532_log_i2c_line_levels("sam-retry");
+        ESP_LOGW(TAG, "SAM config failed (%s), retrying in %d ms",
+                 esp_err_to_name(sam_err), PN532_INIT_RETRY_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(PN532_INIT_RETRY_DELAY_MS));
+    }
+    ESP_LOGI(TAG, "PN532 SAM config successful");
 
     xTaskCreate(sensor_task, "sensor", 4096, NULL, 5, NULL);
     xTaskCreate(nfc_task, "nfc", 6144, NULL, 5, NULL);
