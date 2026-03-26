@@ -5,6 +5,7 @@ const path = require("path");
 const DEFAULT_CONTRACT_KEY = process.env.CHAINPROOF_CONTRACT_KEY || "chainproof";
 const DEFAULT_CONTRACT_VERSION = process.env.CHAINPROOF_CONTRACT_VERSION || "2.0.0";
 const LOCAL_REGISTRY_PATH = path.resolve(__dirname, "../config/contracts.json");
+const tenderlyDashboardUrl = process.env.TENDERLY_DASHBOARD_URL || "";
 const requestedRegistryPath = process.env.CHAINPROOF_REGISTRY_PATH || "";
 const REGISTRY_PATH =
   requestedRegistryPath.startsWith("/config/") && !fs.existsSync("/config")
@@ -57,6 +58,9 @@ async function main() {
   console.log("Chain ID:", chainId);
   console.log("ChainProof deployed to:", address);
   console.log("Owner/Admin address:", deployer.address);
+  if (networkName === "tenderly" && tenderlyDashboardUrl) {
+    console.log("Tenderly dashboard:", tenderlyDashboardUrl);
+  }
   if (account1 && account2 && account3 && account4 && account5) {
     console.log("Suggested demo accounts:");
     console.log("  Producer   ->", account1.address);

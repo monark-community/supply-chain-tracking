@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { saveBatchEnvironmentSnapshot } from '@/lib/environment-alerts';
 
 type BluetoothRequestDeviceOptionsLike = {
   acceptAllDevices?: boolean;
@@ -403,6 +404,7 @@ export function useNfcBleBridge() {
         byteLength: value.byteLength,
       };
       setNfcPayloadSnapshot(snapshot);
+      saveBatchEnvironmentSnapshot(snapshot);
       setLastSuccessfulBlePhase('readValue');
       return snapshot;
     } catch (error) {

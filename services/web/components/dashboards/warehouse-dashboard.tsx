@@ -5,15 +5,17 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { QrCode } from 'lucide-react';
+import { AlertTriangle, QrCode } from 'lucide-react';
 import { readWarehouseStorageQueue, type WarehouseStorageBatch } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 export function WarehouseDashboard() {
   const { account } = useWalletAuth();
   const [storageQueue, setStorageQueue] = useState<WarehouseStorageBatch[]>([]);
   const [loadingQueue, setLoadingQueue] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
+  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!account) {
@@ -44,6 +46,14 @@ export function WarehouseDashboard() {
       mounted = false;
     };
   }, [account]);
+
+  useEffect(() => {
+    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
+    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    return () => {
+      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    };
+  }, []);
 
   const formatTimestamp = (timestamp: number) => {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Unknown time';
@@ -81,12 +91,27 @@ export function WarehouseDashboard() {
           {!loadingQueue && !queueError && storageQueue.length > 0 ? (
             <div className="space-y-3">
               {storageQueue.map((item) => (
-                <div key={item.batchId} className="flex items-center justify-between rounded-lg border p-3">
+                <div
+                  key={item.batchId}
+                  className={`flex items-center justify-between rounded-lg border p-3 ${
+                    getBatchEnvironmentAlert(item.batchId).breached ? 'border-red-200 bg-red-50/40' : ''
+                  }`}
+                >
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-gray-900">Batch {item.batchId}</p>
                     <p className="text-xs text-gray-600">
                       Tracking: {item.trackingCode || 'N/A'} | Origin: {item.origin || 'N/A'} | Qty: {item.quantity}
                     </p>
+                    {(() => {
+                      const envAlert = getBatchEnvironmentAlert(item.batchId);
+                      if (!envAlert.hasData || !envAlert.breached) return null;
+                      return (
+                        <p className="inline-flex items-center gap-1 text-xs text-red-700">
+                          <AlertTriangle className="h-3 w-3" />
+                          {envAlert.details}
+                        </p>
+                      );
+                    })()}
                   </div>
                   <div className="text-right">
                     <p className="text-xs font-medium text-blue-700">{item.status === 'ACTIVE' ? 'Active' : 'Consumed'}</p>
