@@ -3,17 +3,19 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { QrCode } from 'lucide-react';
+import { AlertTriangle, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
 import { readProducerRecentActivity, type ProducerRecentActivity } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 export function ProducerDashboard() {
   const { account } = useWalletAuth();
   const [recentActivity, setRecentActivity] = useState<ProducerRecentActivity[]>([]);
   const [loadingActivity, setLoadingActivity] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
+  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!account) {
@@ -44,6 +46,14 @@ export function ProducerDashboard() {
       mounted = false;
     };
   }, [account]);
+
+  useEffect(() => {
+    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
+    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    return () => {
+      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    };
+  }, []);
 
   const formatTimestamp = (timestamp: number) => {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Unknown time';
@@ -85,10 +95,25 @@ export function ProducerDashboard() {
           {!loadingActivity && !activityError && recentActivity.length > 0 ? (
             <div className="space-y-3">
               {recentActivity.map((item) => (
-                <div key={`${item.type}-${item.txHash}`} className="flex items-center justify-between rounded-lg border p-3">
+                <div
+                  key={`${item.type}-${item.txHash}`}
+                  className={`flex items-center justify-between rounded-lg border p-3 ${
+                    getBatchEnvironmentAlert(item.batchId).breached ? 'border-red-200 bg-red-50/40' : ''
+                  }`}
+                >
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-gray-900">{formatType(item.type)} • Batch {item.batchId}</p>
                     <p className="text-xs text-gray-600">{item.description}</p>
+                    {(() => {
+                      const envAlert = getBatchEnvironmentAlert(item.batchId);
+                      if (!envAlert.hasData || !envAlert.breached) return null;
+                      return (
+                        <p className="inline-flex items-center gap-1 text-xs text-red-700">
+                          <AlertTriangle className="h-3 w-3" />
+                          {envAlert.summary}
+                        </p>
+                      );
+                    })()}
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-gray-500">{formatTimestamp(item.timestamp)}</p>

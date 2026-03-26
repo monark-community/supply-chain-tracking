@@ -16,9 +16,10 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, Search, Clock, Package } from 'lucide-react';
+import { MapPin, Search, Clock, Package, AlertTriangle } from 'lucide-react';
 import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type BatchItem = {
   id: string;
@@ -109,6 +110,7 @@ export default function BatchesPage() {
   const [trackingSubmitting, setTrackingSubmitting] = useState(false);
   const [trackFeedback, setTrackFeedback] = useState<TrackFeedback | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<BatchItem | null>(null);
+  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     setHasHydratedStorage(false);
@@ -137,6 +139,14 @@ export default function BatchesPage() {
     if (!storageKey || !hasHydratedStorage) return;
     window.localStorage.setItem(storageKey, JSON.stringify(batches));
   }, [batches, storageKey, hasHydratedStorage]);
+
+  useEffect(() => {
+    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
+    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    return () => {
+      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    };
+  }, []);
 
   const handleTrackBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -281,6 +291,20 @@ export default function BatchesPage() {
             </DialogHeader>
             {selectedBatch && (
               <div className="space-y-4 text-sm">
+                {(() => {
+                  const envAlert = getBatchEnvironmentAlert(Number(selectedBatch.id));
+                  if (!envAlert.hasData) return null;
+                  return (
+                    <div
+                      className={`rounded-md border px-3 py-2 ${
+                        envAlert.breached ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      }`}
+                    >
+                      <p className="font-semibold">{envAlert.summary}</p>
+                      <p className="text-xs">{envAlert.details}</p>
+                    </div>
+                  );
+                })()}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <p className="text-gray-500">Status</p>
@@ -362,7 +386,12 @@ export default function BatchesPage() {
 
         <div className="space-y-4">
           {filteredBatches.map((batch) => (
-            <Card key={batch.id} className="hover:shadow-md transition-shadow">
+            <Card
+              key={batch.id}
+              className={`hover:shadow-md transition-shadow ${
+                getBatchEnvironmentAlert(Number(batch.id)).breached ? 'border-red-200 bg-red-50/40' : ''
+              }`}
+            >
               <CardContent className="p-6">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 space-y-4">
@@ -373,8 +402,23 @@ export default function BatchesPage() {
                           <Badge className={getStatusColor(batch.status)}>
                             {batch.status.replace('_', ' ')}
                           </Badge>
+                          {(() => {
+                            const envAlert = getBatchEnvironmentAlert(Number(batch.id));
+                            if (!envAlert.hasData || !envAlert.breached) return null;
+                            return (
+                              <Badge variant="destructive" className="flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" />
+                                Env breach
+                              </Badge>
+                            );
+                          })()}
                         </div>
                         <p className="mt-1 text-sm text-gray-600">{batch.product}</p>
+                        {(() => {
+                          const envAlert = getBatchEnvironmentAlert(Number(batch.id));
+                          if (!envAlert.hasData || !envAlert.breached) return null;
+                          return <p className="mt-1 text-xs text-red-700">{envAlert.details}</p>;
+                        })()}
                       </div>
                       <div className="flex items-center gap-2">
                         <Button variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>

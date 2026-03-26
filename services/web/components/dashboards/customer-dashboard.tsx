@@ -2,11 +2,12 @@
 
 import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Package, Shield, Search, Eye, Bluetooth } from 'lucide-react';
+import { AlertTriangle, Package, Shield, Search, Eye, Bluetooth } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
 import { receiveTransferredBatchById } from '@/lib/chainproof-write';
 import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
+import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type TxFeedback = {
   type: 'success' | 'error';
@@ -27,6 +28,7 @@ export function CustomerDashboard() {
     { product: 'Fair Trade Cocoa', batch: 'BATCH-D4E5F6', verified: true, time: '1 hour ago', origin: 'Ethical Cocoa Co.' },
     { product: 'Premium Tea Leaves', batch: 'BATCH-G7H8I9', verified: true, time: '3 hours ago', origin: 'Mountain Tea Estates' },
   ];
+  const activeBatchEnvAlert = getBatchEnvironmentAlert(activeBatchId);
 
   const handleReceive = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -139,6 +141,12 @@ export function CustomerDashboard() {
               <p className="font-semibold text-slate-900">Hardware required</p>
               <p className="mt-1">{isNfcConnected ? `Connected: ${nfcDeviceName || 'ESP32 device'}` : 'Not connected'}</p>
               <p className="mt-1">Active batch ID: {activeBatchId ?? 'Not loaded'}</p>
+              {activeBatchEnvAlert.hasData && activeBatchEnvAlert.breached ? (
+                <p className="mt-1 inline-flex items-center gap-1 text-red-700">
+                  <AlertTriangle className="h-3 w-3" />
+                  {activeBatchEnvAlert.summary}
+                </p>
+              ) : null}
               {connectionError ? <p className="mt-1 text-red-600">{connectionError}</p> : null}
               <div className="mt-2 flex gap-2">
                 <Button type="button" variant="outline" onClick={() => void connectNfcDevice()} disabled={isNfcConnected || isConnecting}>
