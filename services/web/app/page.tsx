@@ -8,7 +8,7 @@ import { ProcessorDashboard } from '@/components/dashboards/processor-dashboard'
 import { CustomerDashboard } from '@/components/dashboards/customer-dashboard';
 import { WarehouseDashboard } from '@/components/dashboards/warehouse-dashboard';
 import { Button } from '@/components/ui/button';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { shortenAddress } from '@/lib/wallet-auth';
 
 export default function Home() {

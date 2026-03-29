@@ -7,7 +7,7 @@ import { Package, MapPin, LayoutDashboard, QrCode } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { useWalletAuth } from './auth/wallet-auth-provider';
+import { useWalletAuth } from './auth/wallet-auth-context';
 import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
 

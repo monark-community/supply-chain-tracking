@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { WalletAuthProvider } from '@/components/auth/wallet-auth-provider';
+import { WalletClientProvider } from '@/components/auth/wallet-client-provider';
+import { WalletAuthProvider } from '@/components/auth/wallet-auth-context';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -19,7 +20,9 @@ export default function RootLayout({
     <html lang="en">
       <body
         className={inter.className}>
-        <WalletAuthProvider>{children}</WalletAuthProvider>
+        <WalletClientProvider>
+          <WalletAuthProvider>{children}</WalletAuthProvider>
+        </WalletClientProvider>
       </body>
     </html>
   );

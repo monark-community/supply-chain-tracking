@@ -2,7 +2,9 @@
 
 import { Contract } from 'ethers';
 import { isAddress } from 'ethers';
-import type { JsonRpcProvider, Wallet } from 'ethers';
+import type { Provider, Signer } from 'ethers';
+import { getActiveWalletSession } from './active-wallet-session';
+import { enableManualWalletFallback } from './wallet-client';
 import { restoreManualWalletSession } from './manual-wallet';
 
 type RegistryEntry = {
@@ -66,8 +68,8 @@ export type ReceiveTransferredBatchResult = {
 };
 
 type ChainproofWriteContext = {
-  provider: JsonRpcProvider;
-  wallet: Wallet;
+  provider: Provider;
+  signer: Signer;
   contract: Contract;
   chainId: number;
   contractAddress: string;
@@ -182,11 +184,27 @@ async function resolveBatchIdFromLookup(context: ChainproofWriteContext, lookup:
 async function createChainproofWriteContext(
   contractKey: string = defaultContractKey
 ): Promise<ChainproofWriteContext> {
-  const [registry, session] = await Promise.all([fetchRegistry(), restoreManualWalletSession()]);
-  if (!session) {
-    throw new Error('No active manual wallet session. Sign in with a private key first.');
+  const registry = await fetchRegistry();
+  let session = getActiveWalletSession();
+
+  if (!session && enableManualWalletFallback) {
+    const manualSession = await restoreManualWalletSession();
+    if (manualSession) {
+      session = {
+        provider: manualSession.provider,
+        signer: manualSession.wallet,
+        address: manualSession.address,
+        chainId: manualSession.chainId,
+        source: 'manual',
+      };
+    }
   }
-  const { provider, wallet, address: account } = session;
+
+  if (!session) {
+    throw new Error('No active wallet session. Connect a wallet first.');
+  }
+
+  const { provider, signer, address: account } = session;
   const network = await provider.getNetwork();
   const chainId = Number(network.chainId);
 
@@ -204,8 +222,8 @@ async function createChainproofWriteContext(
     throw new Error(`No contract code found at ${contractAddress} on chain ${chainId}.`);
   }
 
-  const contract = new Contract(contractAddress, CHAINPROOF_WRITE_ABI, wallet);
-  return { provider, wallet, contract, chainId, contractAddress, account };
+  const contract = new Contract(contractAddress, CHAINPROOF_WRITE_ABI, signer);
+  return { provider, signer, contract, chainId, contractAddress, account };
 }
 
 function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data: string; topics: string[] }> } | null) {

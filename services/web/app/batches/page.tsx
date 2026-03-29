@@ -18,7 +18,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Search, Clock, Package, AlertTriangle } from 'lucide-react';
 import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type BatchItem = {

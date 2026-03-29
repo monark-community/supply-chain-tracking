@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
 import { AlertTriangle, QrCode } from 'lucide-react';
 import { readWarehouseStorageQueue, type WarehouseStorageBatch } from '@/lib/chainproof-read';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 export function WarehouseDashboard() {

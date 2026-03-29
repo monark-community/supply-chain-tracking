@@ -4,18 +4,21 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_check.h"
 #include "esp_timer.h"
 
 #include "driver/gpio.h"
+#include "driver/i2c.h"
 #include "esp_rom_sys.h"
 #include "dht.h"
 
@@ -26,16 +29,33 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
-#define DHT_GPIO              GPIO_NUM_4
+#define DHT_GPIO              GPIO_NUM_3
 #define SAMPLE_PERIOD_MS      3000
 #define DHT_STARTUP_DELAY_MS  2000
 #define DHT_READ_RETRIES      3
 #define DHT_RETRY_DELAY_MS    30
+#define ENABLE_BLE            0
 
-#define TEMP_MIN_ALLOWED_C    (10.0f)
-#define TEMP_MAX_ALLOWED_C    (30.0f)
-#define HUMI_MIN_ALLOWED_PCT  (5.0f)
-#define HUMI_MAX_ALLOWED_PCT  (50.0f)
+#define ST25DV_I2C_PORT            I2C_NUM_0
+#define ST25DV_I2C_SDA_GPIO        GPIO_NUM_8
+#define ST25DV_I2C_SCL_GPIO        GPIO_NUM_11
+#define ST25DV_GPO_GPIO            GPIO_NUM_5
+#define ST25DV_I2C_FREQ_HZ         100000
+#define ST25DV_I2C_USER_ADDR_7BIT  0x53
+#define ST25DV_WRITE_CHUNK_BYTES   4
+#define ST25DV_WRITE_CYCLE_MS      6
+#define ST25DV_MIN_PUSH_MS         2000
+#define ST25DV_TEXT_MAX_LEN        120
+#define ST25DV_REGION_CONTROL_BASE 0x0004
+#define ST25DV_REGION_TELEM_BASE   0x0400
+#define ST25DV_REGION_TELEM_SIZE   192
+#define NFC_CMD_POLL_MS            700
+#define NFC_ACK_HOLD_MS            15000
+
+#define TEMP_MIN_ALLOWED_C    (-5.0f)
+#define TEMP_MAX_ALLOWED_C    (27.0f)
+#define HUMI_MIN_ALLOWED_PCT  (-5.0f)
+#define HUMI_MAX_ALLOWED_PCT  (40.0f)
 
 #define FLAG_OK        0x0
 #define FLAG_TEMP_OOR  0x1
@@ -117,6 +137,15 @@ static const char *BLE_SERVICE_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1001"
 static const char *BLE_CHAR_PAYLOAD_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1002";
 static const char *BLE_CHAR_CTRL_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1003";
 static const char *BLE_CHAR_HIST_UUID_STR = "9a8b7c6d-5e4f-3a2b-1c0d-feedbeef1004";
+static const char *NVS_NAMESPACE = "chainproof";
+static const char *NVS_KEY_ACTIVE_BATCH = "active_batch";
+static bool g_nfc_ready = false;
+static int64_t g_last_nfc_push_us = 0;
+static char g_last_nfc_payload[192];
+static int64_t g_last_ack_written_us = 0;
+static char g_last_cmd_nonce[40];
+
+static void set_active_batch(uint32_t batch_id);
 
 static esp_err_t dht22_read(gpio_num_t pin, float *temp_c, float *humi_pct)
 {
@@ -132,6 +161,315 @@ static esp_err_t dht22_read(gpio_num_t pin, float *temp_c, float *humi_pct)
     *temp_c = t;
     *humi_pct = h;
     return ESP_OK;
+}
+
+static esp_err_t st25dv_i2c_init(void)
+{
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = ST25DV_I2C_SDA_GPIO,
+        .scl_io_num = ST25DV_I2C_SCL_GPIO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = ST25DV_I2C_FREQ_HZ,
+        .clk_flags = 0,
+    };
+
+    esp_err_t err = i2c_param_config(ST25DV_I2C_PORT, &conf);
+    if (err != ESP_OK) return err;
+
+    err = i2c_driver_install(ST25DV_I2C_PORT, conf.mode, 0, 0, 0);
+    if (err == ESP_ERR_INVALID_STATE) {
+        err = i2c_driver_delete(ST25DV_I2C_PORT);
+        if (err != ESP_OK) return err;
+        err = i2c_driver_install(ST25DV_I2C_PORT, conf.mode, 0, 0, 0);
+    }
+    return err;
+}
+
+static void st25dv_gpo_init(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << ST25DV_GPO_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+}
+
+static esp_err_t st25dv_write_user_bytes(uint16_t mem_addr, const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) return ESP_OK;
+
+    size_t offset = 0;
+    while (offset < len) {
+        size_t chunk = len - offset;
+        if (chunk > ST25DV_WRITE_CHUNK_BYTES) chunk = ST25DV_WRITE_CHUNK_BYTES;
+
+        uint8_t tx[2 + ST25DV_WRITE_CHUNK_BYTES];
+        uint16_t addr = (uint16_t)(mem_addr + offset);
+        tx[0] = (uint8_t)(addr >> 8);
+        tx[1] = (uint8_t)(addr & 0xFF);
+        memcpy(&tx[2], &data[offset], chunk);
+
+        esp_err_t err = i2c_master_write_to_device(
+            ST25DV_I2C_PORT,
+            ST25DV_I2C_USER_ADDR_7BIT,
+            tx,
+            chunk + 2,
+            pdMS_TO_TICKS(200)
+        );
+        if (err != ESP_OK) return err;
+
+        offset += chunk;
+        if (offset < len) vTaskDelay(pdMS_TO_TICKS(ST25DV_WRITE_CYCLE_MS));
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t st25dv_read_user_bytes(uint16_t mem_addr, uint8_t *data, size_t len)
+{
+    if (!data || len == 0) return ESP_OK;
+    uint8_t addr[2] = {(uint8_t)(mem_addr >> 8), (uint8_t)(mem_addr & 0xFF)};
+    return i2c_master_write_read_device(
+        ST25DV_I2C_PORT,
+        ST25DV_I2C_USER_ADDR_7BIT,
+        addr,
+        sizeof(addr),
+        data,
+        len,
+        pdMS_TO_TICKS(200)
+    );
+}
+
+static size_t ndef_build_text_record(const char *text, uint8_t *out, size_t out_cap)
+{
+    static const char lang[] = "en";
+    const char *safe_text = text ? text : "";
+    size_t text_len = strlen(safe_text);
+    if (text_len > ST25DV_TEXT_MAX_LEN) text_len = ST25DV_TEXT_MAX_LEN;
+
+    size_t payload_len = 1 + sizeof(lang) - 1 + text_len;
+    if (payload_len > 255) return 0;
+    if (out_cap < payload_len + 4) return 0;
+
+    size_t idx = 0;
+    out[idx++] = 0xD1;
+    out[idx++] = 0x01;
+    out[idx++] = (uint8_t)payload_len;
+    out[idx++] = 'T';
+    out[idx++] = (uint8_t)(sizeof(lang) - 1);
+    memcpy(&out[idx], lang, sizeof(lang) - 1);
+    idx += sizeof(lang) - 1;
+    memcpy(&out[idx], safe_text, text_len);
+    idx += text_len;
+    return idx;
+}
+
+static esp_err_t st25dv_write_ndef_text(const char *text)
+{
+    uint8_t ndef[160];
+    uint8_t tlv[168];
+    size_t ndef_len = ndef_build_text_record(text, ndef, sizeof(ndef));
+    if (ndef_len == 0 || ndef_len > 0xFE) return ESP_ERR_INVALID_SIZE;
+
+    size_t tlv_len = 0;
+    tlv[tlv_len++] = 0x03;
+    tlv[tlv_len++] = (uint8_t)ndef_len;
+    memcpy(&tlv[tlv_len], ndef, ndef_len);
+    tlv_len += ndef_len;
+    tlv[tlv_len++] = 0xFE;
+
+    // NFC Forum Type 5 CC file (single-area access); TLV starts at 0x0004.
+    static const uint8_t cc_file[4] = {0xE1, 0x40, 0xFF, 0x00};
+
+    esp_err_t err = st25dv_write_user_bytes(0x0000, cc_file, sizeof(cc_file));
+    if (err != ESP_OK) return err;
+
+    vTaskDelay(pdMS_TO_TICKS(ST25DV_WRITE_CYCLE_MS));
+    return st25dv_write_user_bytes(ST25DV_REGION_CONTROL_BASE, tlv, tlv_len);
+}
+
+static esp_err_t st25dv_read_ndef_text(char *out, size_t out_cap)
+{
+    if (!out || out_cap < 2) return ESP_ERR_INVALID_ARG;
+    out[0] = '\0';
+
+    uint8_t tlv[176];
+    esp_err_t err = st25dv_read_user_bytes(ST25DV_REGION_CONTROL_BASE, tlv, sizeof(tlv));
+    if (err != ESP_OK) return err;
+    if (tlv[0] != 0x03) return ESP_ERR_NOT_FOUND;
+
+    uint8_t ndef_len = tlv[1];
+    if (ndef_len < 5 || ndef_len > (uint8_t)(sizeof(tlv) - 2)) return ESP_ERR_INVALID_SIZE;
+
+    const uint8_t *ndef = &tlv[2];
+    if (ndef[0] != 0xD1 || ndef[1] != 0x01 || ndef[3] != 'T') return ESP_ERR_INVALID_RESPONSE;
+    uint8_t payload_len = ndef[2];
+    if ((size_t)payload_len + 4 > ndef_len) return ESP_ERR_INVALID_SIZE;
+
+    uint8_t lang_len = (uint8_t)(ndef[4] & 0x3F);
+    if ((size_t)lang_len + 1 > payload_len) return ESP_ERR_INVALID_SIZE;
+    size_t text_len = (size_t)payload_len - 1 - lang_len;
+    if (text_len + 1 > out_cap) text_len = out_cap - 1;
+
+    memcpy(out, &ndef[5 + lang_len], text_len);
+    out[text_len] = '\0';
+    return ESP_OK;
+}
+
+static void st25dv_write_telemetry_mirror(const char *text)
+{
+    if (!text) return;
+    uint8_t mirror[ST25DV_REGION_TELEM_SIZE];
+    memset(mirror, 0, sizeof(mirror));
+    strlcpy((char *)mirror, text, sizeof(mirror));
+    (void)st25dv_write_user_bytes(ST25DV_REGION_TELEM_BASE, mirror, sizeof(mirror));
+}
+
+static bool nfc_parse_kv_value(const char *src, const char *key, char *out, size_t out_cap)
+{
+    if (!src || !key || !out || out_cap == 0) return false;
+    out[0] = '\0';
+
+    size_t key_len = strlen(key);
+    const char *cursor = src;
+    while (cursor && *cursor) {
+        const char *next = strchr(cursor, ';');
+        size_t seg_len = next ? (size_t)(next - cursor) : strlen(cursor);
+        if (seg_len > key_len + 1 && strncmp(cursor, key, key_len) == 0 && cursor[key_len] == '=') {
+            size_t value_len = seg_len - key_len - 1;
+            if (value_len >= out_cap) value_len = out_cap - 1;
+            memcpy(out, cursor + key_len + 1, value_len);
+            out[value_len] = '\0';
+            return true;
+        }
+        cursor = next ? (next + 1) : NULL;
+    }
+    return false;
+}
+
+static void nfc_write_activate_ack(uint32_t batch_id, const char *nonce, bool ok, const char *reason)
+{
+    char ack[192];
+    if (ok) {
+        snprintf(
+            ack,
+            sizeof(ack),
+            "ack=activate_batch;batch_id=%lu;nonce=%s;status=ok",
+            (unsigned long)batch_id,
+            nonce ? nonce : ""
+        );
+    } else {
+        snprintf(
+            ack,
+            sizeof(ack),
+            "ack=activate_batch;batch_id=%lu;nonce=%s;status=error;reason=%s",
+            (unsigned long)batch_id,
+            nonce ? nonce : "",
+            reason ? reason : "unknown"
+        );
+    }
+
+    if (st25dv_write_ndef_text(ack) == ESP_OK) {
+        g_last_ack_written_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "NFC ACK written: %s", ack);
+    } else {
+        ESP_LOGW(TAG, "Failed to write NFC ACK");
+    }
+}
+
+static void nfc_handle_control_command(const char *text)
+{
+    if (!text || !*text) return;
+
+    char cmd[32];
+    if (!nfc_parse_kv_value(text, "cmd", cmd, sizeof(cmd))) return;
+    if (strcmp(cmd, "activate_batch") != 0) return;
+
+    char batch_id_raw[24];
+    char nonce[40];
+    if (!nfc_parse_kv_value(text, "batch_id", batch_id_raw, sizeof(batch_id_raw)) ||
+        !nfc_parse_kv_value(text, "nonce", nonce, sizeof(nonce))) {
+        nfc_write_activate_ack(0, "", false, "missing_field");
+        return;
+    }
+
+    if (strcmp(nonce, g_last_cmd_nonce) == 0) return;
+
+    char *end = NULL;
+    unsigned long parsed = strtoul(batch_id_raw, &end, 10);
+    if (end == batch_id_raw || *end != '\0' || parsed == 0 || parsed > UINT32_MAX) {
+        nfc_write_activate_ack(0, nonce, false, "invalid_batch_id");
+        strlcpy(g_last_cmd_nonce, nonce, sizeof(g_last_cmd_nonce));
+        return;
+    }
+
+    set_active_batch((uint32_t)parsed);
+    strlcpy(g_last_cmd_nonce, nonce, sizeof(g_last_cmd_nonce));
+    nfc_write_activate_ack((uint32_t)parsed, nonce, true, NULL);
+    ESP_LOGI(TAG, "NFC command processed: activate batch %lu", parsed);
+}
+
+static void nfc_command_task(void *param)
+{
+    (void)param;
+    char text[192];
+
+    while (1) {
+        if (!g_nfc_ready) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        if (st25dv_read_ndef_text(text, sizeof(text)) == ESP_OK) {
+            nfc_handle_control_command(text);
+        }
+        vTaskDelay(pdMS_TO_TICKS(NFC_CMD_POLL_MS));
+    }
+}
+
+static void nfc_publish_sample(float t, float h, uint8_t flag2, uint32_t batch_id)
+{
+    if (!g_nfc_ready) return;
+
+    uint32_t ts_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+    char payload[192];
+    snprintf(
+        payload,
+        sizeof(payload),
+        "temp_c=%.2f;humi_pct=%.2f;flag=%u;batch_id=%lu;ts=%lu",
+        t,
+        h,
+        (unsigned int)flag2,
+        (unsigned long)batch_id,
+        (unsigned long)ts_s
+    );
+
+    int64_t now_us = esp_timer_get_time();
+    st25dv_write_telemetry_mirror(payload);
+
+    if ((now_us - g_last_ack_written_us) < (int64_t)NFC_ACK_HOLD_MS * 1000LL) {
+        return;
+    }
+
+    if (strcmp(payload, g_last_nfc_payload) == 0 &&
+        (now_us - g_last_nfc_push_us) < (int64_t)ST25DV_MIN_PUSH_MS * 1000LL) {
+        return;
+    }
+
+    esp_err_t err = st25dv_write_ndef_text(payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ST25DV NDEF write failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    strlcpy(g_last_nfc_payload, payload, sizeof(g_last_nfc_payload));
+    g_last_nfc_push_us = now_us;
+    ESP_LOGI(TAG, "NFC updated: %s", payload);
 }
 //#endif // BLE_DISABLED_TEMP
 
@@ -1631,6 +1969,25 @@ static void set_active_batch(uint32_t batch_id)
     g_payload.flag2 = FLAG_OK;
     g_initialized = false;
     xSemaphoreGive(g_lock);
+
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS for active batch set: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = nvs_set_u32(handle, NVS_KEY_ACTIVE_BATCH, batch_id);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to persist active batch %lu: %s", (unsigned long)batch_id, esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Persisted active batch %lu to NVS", (unsigned long)batch_id);
+    }
 }
 
 static void clear_active_batch(void)
@@ -1647,6 +2004,28 @@ static void clear_active_batch(void)
     g_payload.flag2 = FLAG_OK;
     g_initialized = false;
     xSemaphoreGive(g_lock);
+
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS for active batch clear: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = nvs_erase_key(handle, NVS_KEY_ACTIVE_BATCH);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to clear persisted active batch: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Cleared persisted active batch in NVS");
+    }
 }
 
 static bool conn_is_encrypted(uint16_t conn_handle)
@@ -2013,7 +2392,9 @@ static void sensor_task(void *param)
         }
         if (err == ESP_OK) {
             update_payload(t, h);
+#if ENABLE_BLE
             notify_payload();
+#endif
 
             payload_t snap;
             xSemaphoreTake(g_lock, portMAX_DELAY);
@@ -2026,6 +2407,8 @@ static void sensor_task(void *param)
                      snap.temp_min, snap.temp_max,
                      snap.humi_min, snap.humi_max,
                      snap.flag2);
+
+            nfc_publish_sample(t, h, snap.flag2, snap.batch_id);
         } else {
             ESP_LOGW(TAG, "DHT22 read failed after %d retries: %s (line_level=%d gpio=%d)",
                      DHT_READ_RETRIES, esp_err_to_name(err), last_level, (int)DHT_GPIO);
@@ -2066,6 +2449,51 @@ void app_main(void)
     g_payload.batch_id = 0;
 #endif
 
+    nvs_handle_t persisted_handle = 0;
+    esp_err_t persisted_err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &persisted_handle);
+    if (persisted_err == ESP_OK) {
+        uint32_t persisted_batch_id = 0;
+        persisted_err = nvs_get_u32(persisted_handle, NVS_KEY_ACTIVE_BATCH, &persisted_batch_id);
+        nvs_close(persisted_handle);
+
+        if (persisted_err == ESP_OK && persisted_batch_id > 0) {
+            xSemaphoreTake(g_lock, portMAX_DELAY);
+            g_has_active_batch = true;
+            g_active_batch_id = persisted_batch_id;
+            g_payload.has_batch = 1;
+            g_payload.batch_id = persisted_batch_id;
+            g_payload.temp_min = 0.0f;
+            g_payload.temp_max = 0.0f;
+            g_payload.humi_min = 0.0f;
+            g_payload.humi_max = 0.0f;
+            g_payload.flag2 = FLAG_OK;
+            g_initialized = false;
+            xSemaphoreGive(g_lock);
+            ESP_LOGI(TAG, "Restored active batch from NVS: %lu", (unsigned long)persisted_batch_id);
+        } else if (persisted_err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read persisted active batch: %s", esp_err_to_name(persisted_err));
+        } else {
+            ESP_LOGI(TAG, "No persisted active batch found in NVS");
+        }
+    } else {
+        ESP_LOGW(TAG, "Failed to open NVS for active batch restore: %s", esp_err_to_name(persisted_err));
+    }
+
+    st25dv_gpo_init();
+    esp_err_t nfc_init_err = st25dv_i2c_init();
+    if (nfc_init_err == ESP_OK) {
+        g_nfc_ready = true;
+        ESP_LOGI(TAG, "ST25DV ready on I2C addr=0x%02X SDA=%d SCL=%d GPO=%d",
+                 ST25DV_I2C_USER_ADDR_7BIT,
+                 (int)ST25DV_I2C_SDA_GPIO,
+                 (int)ST25DV_I2C_SCL_GPIO,
+                 (int)ST25DV_GPO_GPIO);
+    } else {
+        g_nfc_ready = false;
+        ESP_LOGW(TAG, "ST25DV init failed (NFC disabled): %s", esp_err_to_name(nfc_init_err));
+    }
+
+#if ENABLE_BLE
     nimble_port_init();
 
     ble_hs_cfg.sync_cb = on_sync;
@@ -2092,13 +2520,15 @@ void app_main(void)
     }
 
     ble_svc_gap_device_name_set("ESP32H2-DHT");
-
     nimble_port_freertos_init(host_task);
-
     xTaskCreate(history_stream_task, "hist_stream", 4096, NULL, 5, NULL);
+#else
+    ESP_LOGI(TAG, "BLE runtime disabled. NFC-only mode is active.");
+#endif
 
 #if !MANUAL_MODE
     xTaskCreate(sensor_task, "sensor", 4096, NULL, 5, NULL);
 #endif
+    xTaskCreate(nfc_command_task, "nfc_cmd", 4096, NULL, 5, NULL);
 }
 // #endif // BLE_DISABLED_TEMP_REMAINDER

@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## ChainProof Web
 
-## Getting Started
+Next.js frontend for the ChainProof workflow with:
 
-First, run the development server:
+- Wallet-based auth (MetaMask + WalletConnect)
+- Role-based UI routing by on-chain wallet role
+- NFC-driven producer activation flow
+
+## Environment
+
+Copy `.env.example` to `.env.local` and set:
+
+- `NEXT_PUBLIC_CHAINPROOF_RPC_URL`: RPC endpoint for your local chain
+- `NEXT_PUBLIC_CHAINPROOF_CHAIN_ID`: local chain id (for example `1337`)
+- `NEXT_PUBLIC_CHAINPROOF_CONTRACT_KEY`: registry key (default `chainproof`)
+- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`: WalletConnect project id (required for mobile/iOS WalletConnect)
+- `NEXT_PUBLIC_ENABLE_MANUAL_WALLET`: optional debug fallback (`true`/`false`) to allow private-key login form
+
+## Run Locally
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev -- --hostname 0.0.0.0 --port 3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open from desktop at `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Wallet Login With Local Chain
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Start your local chain and deploy contracts.
+2. Ensure the RPC is reachable from your laptop browser at `NEXT_PUBLIC_CHAINPROOF_RPC_URL`.
+3. Add that network to MetaMask using the same chain id as `NEXT_PUBLIC_CHAINPROOF_CHAIN_ID`.
+4. Import/fund one of your local dev accounts in MetaMask.
+5. Open the app and connect wallet from the login page.
 
-## Learn More
+## iPhone/iPad (WalletConnect + MetaMask)
 
-To learn more about Next.js, take a look at the following resources:
+1. Expose your local RPC to phone-accessible HTTPS (via Cloudflare Tunnel).
+2. Point `NEXT_PUBLIC_CHAINPROOF_RPC_URL` to that public RPC URL.
+3. Run the web app on a phone-reachable host (`npm run dev -- --hostname 0.0.0.0 --port 3000`).
+4. Open the site on iOS Safari.
+5. Tap wallet connect in login, choose WalletConnect, then approve in MetaMask app.
+6. Return to Safari and continue role assignment / app actions.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Contract writes are signed by the currently connected wallet account.
+- On-chain role checks still determine allowed actions.
+- Manual private-key mode is intentionally hidden behind `NEXT_PUBLIC_ENABLE_MANUAL_WALLET=true` for debugging only.

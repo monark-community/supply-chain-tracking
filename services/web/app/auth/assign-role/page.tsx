@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Package, ShieldCheck } from 'lucide-react';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
 
@@ -51,11 +51,11 @@ export default function AssignRolePage() {
 
   useEffect(() => {
     if (!account && status !== 'connecting') {
-      router.push('/auth/login');
+      router.replace('/auth/login');
       return;
     }
     if (role !== 'none' && status === 'connected') {
-      router.push('/');
+      router.replace('/');
     }
   }, [account, role, router, status]);
 

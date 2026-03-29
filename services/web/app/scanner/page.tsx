@@ -2,14 +2,14 @@
 
 import { useState, type FormEvent } from 'react';
 import { Nav } from '@/components/nav';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
-import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
+import { useNFC } from '@/hooks/useNFC';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { ArrowRightLeft, Bluetooth, Package, Search, Waves } from 'lucide-react';
+import { ArrowRightLeft, Package, Search, Waves } from 'lucide-react';
 import { harvestProducerBatch, initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
 import { readBatchByTrackingOrId, readPredictedNextBatchId } from '@/lib/chainproof-read';
 import type { AppRole } from '@/lib/wallet-auth';
@@ -26,28 +26,54 @@ type HarvestFeedback = {
   txHash?: string;
 };
 
+type NfcSnapshot = {
+  tempMin: number | null;
+  tempMax: number | null;
+  humiMin: number | null;
+  humiMax: number | null;
+  flag2: number | null;
+  hasBatchId: boolean;
+  batchId: number | null;
+  raw: string;
+};
+
+const parseSemicolonKv = (text: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  text
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((segment) => {
+      const idx = segment.indexOf('=');
+      if (idx <= 0) return;
+      const key = segment.slice(0, idx).trim();
+      const value = segment.slice(idx + 1).trim();
+      if (!key) return;
+      out[key] = value;
+    });
+  return out;
+};
+
+const parseActiveBatchIdFromTagText = (text: string): number | null => {
+  const kv = parseSemicolonKv(text);
+  const raw = kv.batch_id;
+  if (!raw) return null;
+  const numeric = Math.floor(Number(raw));
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+};
+
 export default function ScannerPage() {
   const { role, isConnected } = useWalletAuth();
-  const {
-    isConnecting,
-    isNfcConnected,
-    nfcDeviceName,
-    nfcDeviceId,
-    connectionError,
-    isReadingNfc,
-    nfcReadError,
-    nfcPayloadSnapshot,
-    blePhase,
-    lastSuccessfulBlePhase,
-    lastBleErrorName,
-    lastBleErrorMessage,
-    connectNfcDevice,
-    readNfcPayloadSnapshot,
-    readActiveBatchIdFromHardware,
-    setActiveBatchOnHardware,
-    clearActiveBatchOnHardware,
-    disconnectNfcDevice,
-  } = useNfcBleBridge();
+  const { isSupported, isReading, isWriting, lastRead, lastWritten, error, readTag, writeTag } = useNFC();
+
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [isScanningBatchId, setIsScanningBatchId] = useState(false);
+  const [isAwaitingAck, setIsAwaitingAck] = useState(false);
+  const [lastAckPayload, setLastAckPayload] = useState<string | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [isReadingNfc, setIsReadingNfc] = useState(false);
+  const [nfcReadError, setNfcReadError] = useState<string | null>(null);
+  const [nfcPayloadSnapshot, setNfcPayloadSnapshot] = useState<NfcSnapshot | null>(null);
 
   const [origin, setOrigin] = useState('');
   const [trackingCode, setTrackingCode] = useState('');
@@ -61,7 +87,6 @@ export default function ScannerPage() {
 
   const [receiveSubmitting, setReceiveSubmitting] = useState(false);
   const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
-  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
 
   const [verifyLookup, setVerifyLookup] = useState('');
   const [verifySubmitting, setVerifySubmitting] = useState(false);
@@ -69,28 +94,94 @@ export default function ScannerPage() {
 
   const activeRole: AppRole = isConnected ? role : 'none';
 
+  const loadBatchIdFromScan = async (): Promise<number | null> => {
+    if (!isSupported) throw new Error('WebNFC is not supported in this browser.');
+
+    setIsScanningBatchId(true);
+    setScanMessage('Scan the NFC tag to read the active batch ID.');
+    try {
+      const text = await readTag();
+      const batchId = parseActiveBatchIdFromTagText(text);
+      if (!batchId) throw new Error('Scanned tag does not contain a valid batch_id.');
+      setActiveBatchId(batchId);
+      setScanMessage(`Active batch loaded from tag: ${batchId}.`);
+      return batchId;
+    } finally {
+      setIsScanningBatchId(false);
+    }
+  };
+
+  const readNfcPayloadSnapshot = async () => {
+    if (!isSupported) {
+      setNfcReadError('WebNFC is not supported in this browser.');
+      return;
+    }
+
+    setIsReadingNfc(true);
+    setNfcReadError(null);
+    try {
+      const text = await readTag();
+      const kv = parseSemicolonKv(text);
+      const batchId = parseActiveBatchIdFromTagText(text);
+      const snapshot: NfcSnapshot = {
+        tempMin: kv.temp_min ? Number(kv.temp_min) : null,
+        tempMax: kv.temp_max ? Number(kv.temp_max) : null,
+        humiMin: kv.humi_min ? Number(kv.humi_min) : null,
+        humiMax: kv.humi_max ? Number(kv.humi_max) : null,
+        flag2: kv.flag ? Number(kv.flag) : null,
+        hasBatchId: Boolean(batchId),
+        batchId,
+        raw: text,
+      };
+      setNfcPayloadSnapshot(snapshot);
+      if (batchId) setActiveBatchId(batchId);
+    } catch (readErr) {
+      setNfcReadError(readErr instanceof Error ? readErr.message : 'Failed to read NFC payload.');
+    } finally {
+      setIsReadingNfc(false);
+    }
+  };
+
   const handleCreateBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setHarvestSubmitting(true);
     setHarvestFeedback(null);
+    setLastAckPayload(null);
 
-    if (!isNfcConnected) {
+    if (!isSupported) {
       setHarvestFeedback({
         type: 'error',
-        message: 'Connect an NFC device before creating a batch.',
+        message: 'WebNFC is not available in this browser/device.',
       });
       setHarvestSubmitting(false);
       return;
     }
 
-    let stagedBatchId: number | null = null;
-    let wroteHardware = false;
-
     try {
       const quantity = Number(quantityInput);
-      stagedBatchId = await readPredictedNextBatchId();
-      await setActiveBatchOnHardware(stagedBatchId);
-      wroteHardware = true;
+      const stagedBatchId = await readPredictedNextBatchId();
+      const nonce = `${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+      const command = `cmd=activate_batch;batch_id=${stagedBatchId};nonce=${nonce}`;
+
+      setScanMessage('Tap NFC tag now to write activation command.');
+      await writeTag(command);
+
+      setIsAwaitingAck(true);
+      setScanMessage('Activation command written. Tap same tag again to read hardware ACK.');
+      const ackText = await readTag();
+      setLastAckPayload(ackText);
+
+      const ackKv = parseSemicolonKv(ackText);
+      const ackBatchId = parseActiveBatchIdFromTagText(ackText);
+      const isValidAck =
+        ackKv.ack === 'activate_batch' &&
+        ackKv.status === 'ok' &&
+        ackKv.nonce === nonce &&
+        ackBatchId === stagedBatchId;
+
+      if (!isValidAck) {
+        throw new Error('Hardware ACK missing or invalid. Batch creation was not submitted to blockchain.');
+      }
 
       const result = await harvestProducerBatch({
         origin,
@@ -100,27 +191,21 @@ export default function ScannerPage() {
 
       setHarvestFeedback({
         type: 'success',
-        message: `Batch ${result.newBatchId ?? 'pending'} harvested on-chain successfully.`,
+        message: `Batch ${result.newBatchId ?? stagedBatchId} harvested on-chain successfully.`,
         txHash: result.txHash,
       });
       setOrigin('');
       setTrackingCode('');
       setQuantityInput('');
       setActiveBatchId(result.newBatchId ?? stagedBatchId);
-    } catch (error) {
-      if (wroteHardware) {
-        try {
-          await clearActiveBatchOnHardware();
-        } catch {
-          // Best-effort rollback if on-chain creation fails after hardware staging.
-        }
-      }
-      const message = error instanceof Error ? error.message : 'Failed to create batch.';
+    } catch (errorObj) {
+      const message = errorObj instanceof Error ? errorObj.message : 'Failed to create batch.';
       setHarvestFeedback({
         type: 'error',
-        message: stagedBatchId ? `${message} Hardware rollback was attempted.` : message,
+        message,
       });
     } finally {
+      setIsAwaitingAck(false);
       setHarvestSubmitting(false);
     }
   };
@@ -133,9 +218,9 @@ export default function ScannerPage() {
     try {
       let batchId = activeBatchId;
       if (!batchId) {
-        batchId = await readActiveBatchIdFromHardware();
+        batchId = await loadBatchIdFromScan();
       }
-      if (!batchId) throw new Error('No active batch id found on connected hardware.');
+      if (!batchId) throw new Error('No active batch id found on NFC tag.');
       setActiveBatchId(batchId);
       const result = await initiateBatchTransferById({
         batchId,
@@ -165,9 +250,9 @@ export default function ScannerPage() {
     try {
       let batchId = activeBatchId;
       if (!batchId) {
-        batchId = await readActiveBatchIdFromHardware();
+        batchId = await loadBatchIdFromScan();
       }
-      if (!batchId) throw new Error('No active batch id found on connected hardware.');
+      if (!batchId) throw new Error('No active batch id found on NFC tag.');
       setActiveBatchId(batchId);
       const result = await receiveTransferredBatchById({ batchId });
       setReceiveFeedback({
@@ -231,7 +316,7 @@ export default function ScannerPage() {
         />
       </div>
       {renderTxFeedback(transferFeedback)}
-      <Button className="w-full" disabled={transferSubmitting || !isNfcConnected || !activeBatchId || !transferRecipient.trim()}>
+      <Button className="w-full" disabled={transferSubmitting || !activeBatchId || !transferRecipient.trim()}>
         <ArrowRightLeft className="mr-2 h-4 w-4" />
         {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
       </Button>
@@ -243,7 +328,7 @@ export default function ScannerPage() {
       <h4 className="font-semibold text-gray-900">{title}</h4>
       <p className="text-xs text-slate-600">Active hardware batch ID: {activeBatchId ?? 'Not loaded'}</p>
       {renderTxFeedback(receiveFeedback)}
-      <Button className="w-full" disabled={receiveSubmitting || !isNfcConnected || !activeBatchId}>
+      <Button className="w-full" disabled={receiveSubmitting || !activeBatchId}>
         <Package className="mr-2 h-4 w-4" />
         {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
       </Button>
@@ -264,7 +349,7 @@ export default function ScannerPage() {
         <div className="space-y-4">
           <form onSubmit={handleCreateBatch} className="space-y-3 rounded-lg border bg-white p-4">
             <h4 className="font-semibold text-gray-900">Create New Batch</h4>
-            <p className="text-xs text-slate-600">Batch creation is available in NFC Console only.</p>
+            <p className="text-xs text-slate-600">NFC scan is required to activate hardware batch before on-chain create.</p>
             <div className="space-y-2">
               <Label htmlFor="producer-origin">Origin / Product Label</Label>
               <Input
@@ -286,13 +371,13 @@ export default function ScannerPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="producer-quantity">Quantity</Label>
+              <Label htmlFor="producer-quantity">Weight (kg)</Label>
               <Input
                 id="producer-quantity"
                 type="number"
                 value={quantityInput}
                 onChange={(event) => setQuantityInput(event.target.value)}
-                placeholder="e.g., 5000"
+                placeholder="e.g., 100"
                 min={1}
                 disabled={harvestSubmitting}
               />
@@ -303,9 +388,10 @@ export default function ScannerPage() {
                 {harvestFeedback.txHash ? ` tx: ${harvestFeedback.txHash}` : ''}
               </p>
             ) : null}
-            <Button className="w-full" disabled={harvestSubmitting || !isNfcConnected}>
+            {lastAckPayload ? <p className="break-all text-xs text-slate-600">Last ACK: {lastAckPayload}</p> : null}
+            <Button className="w-full" disabled={harvestSubmitting || !isSupported}>
               <Package className="mr-2 h-4 w-4" />
-              {harvestSubmitting ? 'Submitting...' : 'Create Batch'}
+              {harvestSubmitting ? (isAwaitingAck ? 'Waiting for ACK...' : 'Submitting...') : 'Create Batch'}
             </Button>
           </form>
           {renderTransferForm('producer')}
@@ -373,68 +459,55 @@ export default function ScannerPage() {
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <Card>
           <CardHeader>
-            <CardTitle>NFC Console Connection</CardTitle>
+            <CardTitle>NFC Console</CardTitle>
             <CardDescription>
-              Temporary BLE bridge for NFC workflow testing. Final production behavior will switch to NFC.
+              NFC-only workflow: producer writes activation command, hardware acknowledges, then blockchain harvest is submitted.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={isNfcConnected ? 'success' : 'outline'}>
-                {isNfcConnected ? 'NFC device connected' : 'NFC device not connected'}
-              </Badge>
+              <Badge variant={isSupported ? 'success' : 'outline'}>{isSupported ? 'WebNFC supported' : 'WebNFC unavailable'}</Badge>
               <Badge variant={isConnected ? 'secondary' : 'warning'}>{isConnected ? `Role: ${roleLabel}` : 'Wallet disconnected'}</Badge>
+              <Badge variant={activeBatchId ? 'success' : 'outline'}>{activeBatchId ? `Active batch: ${activeBatchId}` : 'No active batch loaded'}</Badge>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => void connectNfcDevice()} disabled={isConnecting || isNfcConnected}>
-                <Bluetooth className="mr-2 h-4 w-4" />
-                {isConnecting ? 'Connecting...' : 'Connect NFC Device'}
-              </Button>
-              <Button variant="secondary" onClick={() => void readNfcPayloadSnapshot()} disabled={!isNfcConnected || isReadingNfc}>
+              <Button
+                variant="secondary"
+                onClick={() => void readNfcPayloadSnapshot()}
+                disabled={!isSupported || isReadingNfc || isReading}
+              >
                 <Waves className="mr-2 h-4 w-4" />
-                {isReadingNfc ? 'Reading...' : 'Read Payload Snapshot'}
+                {isReadingNfc || isReading ? 'Reading...' : 'Read Tag Snapshot'}
               </Button>
               <Button
                 variant="secondary"
-                onClick={() => void readActiveBatchIdFromHardware().then((id) => setActiveBatchId(id))}
-                disabled={!isNfcConnected || isReadingNfc}
+                onClick={() => void loadBatchIdFromScan()}
+                disabled={!isSupported || isScanningBatchId || isReading}
               >
-                Load Batch ID
-              </Button>
-              <Button variant="outline" onClick={disconnectNfcDevice} disabled={!isNfcConnected}>
-                Disconnect
+                {isScanningBatchId ? 'Scanning...' : 'Scan Batch ID'}
               </Button>
             </div>
 
-            {isNfcConnected ? (
-              <p className="text-sm text-gray-700">
-                Connected to <span className="font-semibold">{nfcDeviceName || 'Unnamed ESP32'}</span>
-                {nfcDeviceId ? ` (${nfcDeviceId})` : ''}.
-              </p>
-            ) : null}
-
-            {connectionError ? <p className="text-sm text-red-600">{connectionError}</p> : null}
+            {scanMessage ? <p className="text-sm text-slate-700">{scanMessage}</p> : null}
+            {error ? <p className="text-sm text-red-600">{error}</p> : null}
             {nfcReadError ? <p className="text-sm text-red-600">{nfcReadError}</p> : null}
+            {isWriting ? <p className="text-xs text-slate-600">Writing NFC command...</p> : null}
+            {lastWritten ? <p className="break-all text-xs text-slate-600">Last written command: {lastWritten}</p> : null}
+            {lastRead ? <p className="break-all text-xs text-slate-600">Last scanned payload: {lastRead}</p> : null}
 
             {nfcPayloadSnapshot ? (
               <div className="rounded-md border bg-green-50 p-3 text-xs text-green-900">
                 <p className="font-semibold">Latest payload snapshot</p>
-                <p className="mt-1">Temp range: {nfcPayloadSnapshot.tempMin.toFixed(2)} to {nfcPayloadSnapshot.tempMax.toFixed(2)} C</p>
-                <p>Humidity range: {nfcPayloadSnapshot.humiMin.toFixed(2)} to {nfcPayloadSnapshot.humiMax.toFixed(2)} %</p>
-                <p>Flag: {nfcPayloadSnapshot.flag2}</p>
+                <p className="mt-1">Temp min: {nfcPayloadSnapshot.tempMin ?? 'n/a'} C</p>
+                <p>Temp max: {nfcPayloadSnapshot.tempMax ?? 'n/a'} C</p>
+                <p>Humidity min: {nfcPayloadSnapshot.humiMin ?? 'n/a'} %</p>
+                <p>Humidity max: {nfcPayloadSnapshot.humiMax ?? 'n/a'} %</p>
+                <p>Flag: {nfcPayloadSnapshot.flag2 ?? 'n/a'}</p>
                 <p>Batch ID: {nfcPayloadSnapshot.hasBatchId ? nfcPayloadSnapshot.batchId : 'Not set'}</p>
-                <p>Payload bytes: {nfcPayloadSnapshot.byteLength}</p>
+                <p className="break-all">Raw: {nfcPayloadSnapshot.raw}</p>
               </div>
             ) : null}
-
-            <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700">
-              <p className="font-semibold text-slate-900">BLE Diagnostics</p>
-              <p className="mt-1">Current phase: {blePhase}</p>
-              <p>Last successful phase: {lastSuccessfulBlePhase}</p>
-              <p>Last error name: {lastBleErrorName ?? 'None'}</p>
-              <p className="break-all">Last error details: {lastBleErrorMessage ?? 'None'}</p>
-            </div>
           </CardContent>
         </Card>
 
