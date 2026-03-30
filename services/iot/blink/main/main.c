@@ -51,7 +51,7 @@
 #define NFC_CC_REPAIR_MODE         0
 #define NFC_CC_REPAIR_DUMP_BYTES   32
 #define NFC_CC_REPAIR_TEST_URL     "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-#define NFC_DEEPLINK_BASE_URL      "https://achievement-vegetables-sheet-nevertheless.trycloudflare.com/nfc"
+#define NFC_DEEPLINK_BASE_URL      "https://columnists-fully-assembled-trusted.trycloudflare.com/nfc"
 #define NFC_SIGNING_KEY            "chainproof-demo-signing-key"
 #define NFC_PAYLOAD_VERSION        2
 #define NFC_SIG_BYTES              16

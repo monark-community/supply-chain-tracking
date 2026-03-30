@@ -27,7 +27,9 @@ export function Nav() {
   const pathname = usePathname();
   const [nextRole, setNextRole] = useState<Exclude<AppRole, 'none'> | ''>('');
   const [isChangingRole, setIsChangingRole] = useState(false);
-  const { isConnected, disconnectWallet, account, role, assignMyRole } = useWalletAuth();
+  const [isSyncingAccount, setIsSyncingAccount] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const { isConnected, disconnectWallet, account, role, assignMyRole, syncMobileWalletAccount } = useWalletAuth();
 
   const handleChangeRole = async () => {
     if (!nextRole) return;
@@ -38,6 +40,18 @@ export function Nav() {
       setNextRole('');
     } finally {
       setIsChangingRole(false);
+    }
+  };
+
+  const handleMobileSync = async () => {
+    try {
+      setSyncError(null);
+      setIsSyncingAccount(true);
+      await syncMobileWalletAccount();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Unable to sync wallet account.');
+    } finally {
+      setIsSyncingAccount(false);
     }
   };
 
@@ -131,6 +145,14 @@ export function Nav() {
               <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700">
                 {shortenAddress(account || '')} • {role}
               </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => void handleMobileSync()} disabled={isSyncingAccount}>
+                  {isSyncingAccount ? 'Syncing...' : 'Sync account'}
+                </Button>
+              </div>
+              {syncError ? (
+                <p className="text-xs text-red-600">{syncError}</p>
+              ) : null}
               <div className="flex items-center gap-2">
                 <Select value={nextRole} onValueChange={(value) => setNextRole(value as Exclude<AppRole, 'none'>)}>
                   <SelectTrigger className="h-8 flex-1 text-xs">

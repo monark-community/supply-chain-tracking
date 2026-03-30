@@ -12,7 +12,7 @@ import { clearManualWalletSession, createAndPersistManualWalletSession, restoreM
 import { assignMyWalletRole, resolveWalletRoleContext } from '@/lib/chainproof-auth';
 import type { AppRole } from '@/lib/wallet-auth';
 import { configuredChainId } from '@/lib/wallet-auth';
-import { enableManualWalletFallback } from '@/lib/wallet-client';
+import { chainproofChain, enableManualWalletFallback } from '@/lib/wallet-client';
 import { getActiveWalletSession, setActiveWalletSession } from '@/lib/active-wallet-session';
 
 type WalletAuthStatus =
@@ -27,6 +27,13 @@ type WalletAuthStatus =
 type WalletOption = {
   id: string;
   name: string;
+};
+
+type EventedEip1193Provider = Eip1193Provider & {
+  request?: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+  providers?: EventedEip1193Provider[];
 };
 
 type RuntimeWalletSession = {
@@ -51,6 +58,7 @@ type WalletAuthContextValue = {
   connectWalletWith: (connectorId: string) => Promise<void>;
   disconnectWallet: () => Promise<void>;
   refreshWalletState: () => Promise<void>;
+  syncMobileWalletAccount: () => Promise<void>;
   assignMyRole: (role: Exclude<AppRole, 'none'>) => Promise<void>;
 };
 
@@ -60,9 +68,100 @@ function normalizeAddress(address: string | null | undefined) {
   return (address || '').toLowerCase();
 }
 
-function isAlreadyConnectedError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error || '');
-  return message.toLowerCase().includes('already connected');
+function parseChainIdValue(chainIdValue: unknown): number | null {
+  if (typeof chainIdValue === 'number' && Number.isFinite(chainIdValue)) {
+    return chainIdValue;
+  }
+  if (typeof chainIdValue === 'string' && chainIdValue.length > 0) {
+    const parsed = chainIdValue.startsWith('0x')
+      ? Number.parseInt(chainIdValue, 16)
+      : Number.parseInt(chainIdValue, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function isDesktopWalletSyncTarget() {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  const ua = navigator.userAgent || '';
+  const isMobileUa = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  const hasTouch = navigator.maxTouchPoints > 1;
+  return !isMobileUa && !hasTouch;
+}
+
+function isMobileWalletSyncTarget() {
+  return !isDesktopWalletSyncTarget();
+}
+
+function toHexChainId(chainId: number) {
+  return `0x${chainId.toString(16)}`;
+}
+
+async function readPassiveProviderSnapshot(provider: EventedEip1193Provider | null | undefined) {
+  if (!provider?.request) {
+    return null;
+  }
+  try {
+    const [accountsValue, chainIdValue] = await Promise.all([
+      provider.request({ method: 'eth_accounts' }),
+      provider.request({ method: 'eth_chainId' }),
+    ]);
+
+    const accounts = Array.isArray(accountsValue) ? accountsValue : [];
+    const firstAccount = typeof accounts[0] === 'string' ? accounts[0] : null;
+    return {
+      address: firstAccount,
+      chainId: parseChainIdValue(chainIdValue),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function ensureConfiguredWalletChain(connector: Connector) {
+  if (!Number.isFinite(configuredChainId) || configuredChainId <= 0) {
+    return;
+  }
+
+  const connectorProvider = (await connector.getProvider()) as EventedEip1193Provider | undefined;
+  if (!connectorProvider?.request) {
+    return;
+  }
+
+  const snapshot = await readPassiveProviderSnapshot(connectorProvider);
+  if (snapshot?.chainId === configuredChainId) {
+    return;
+  }
+
+  const targetHexChainId = toHexChainId(configuredChainId);
+  try {
+    await connectorProvider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: targetHexChainId }],
+    });
+  } catch (switchError) {
+    const errorCode = Number((switchError as { code?: number } | undefined)?.code ?? 0);
+    if (errorCode !== 4902) {
+      throw switchError;
+    }
+
+    await connectorProvider.request({
+      method: 'wallet_addEthereumChain',
+      params: [{
+        chainId: targetHexChainId,
+        chainName: chainproofChain.name,
+        nativeCurrency: chainproofChain.nativeCurrency,
+        rpcUrls: chainproofChain.rpcUrls.default.http,
+      }],
+    });
+
+    await connectorProvider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: targetHexChainId }],
+    });
+  }
 }
 
 function isRecoverableConnectorError(error: unknown) {
@@ -73,20 +172,6 @@ function isRecoverableConnectorError(error: unknown) {
     message.includes('pending') ||
     message.includes('resource unavailable')
   );
-}
-
-function isUnrecognizedChainError(error: unknown) {
-  const message = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
-  return (
-    message.includes('4902') ||
-    message.includes('unrecognized chain') ||
-    message.includes('unknown chain') ||
-    message.includes('wallet_addethereumchain')
-  );
-}
-
-function toHexChainId(chainId: number) {
-  return `0x${Math.max(0, chainId).toString(16)}`;
 }
 
 function walletClientToRuntimeSession(client: Client<Transport, Chain, Account>): RuntimeWalletSession {
@@ -113,7 +198,7 @@ async function runtimeSessionFromConnector(
     return null;
   }
   const provider = new BrowserProvider(connectorProvider as Eip1193Provider);
-  const signer = await provider.getSigner(address);
+  const signer = new JsonRpcSigner(provider, address);
   const network = await provider.getNetwork();
   return {
     provider,
@@ -132,6 +217,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   const [contractAddress, setContractAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const lastForegroundRefreshRef = useRef<number>(0);
 
   const { address: connectedAddress, connector: activeConnector, isConnected } = useAccount();
   const { connectAsync, connectors } = useConnect();
@@ -153,35 +239,42 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     setContractAddress(null);
   }, []);
 
-  const ensureConfiguredWalletChain = useCallback(
-    async (provider: BrowserProvider) => {
-      if (!Number.isFinite(configuredChainId) || configuredChainId <= 0) return;
-      const currentNetwork = await provider.getNetwork();
-      const currentChainId = Number(currentNetwork.chainId);
-      if (currentChainId === configuredChainId) return;
-
-      const desiredChainHex = toHexChainId(configuredChainId);
+  const resolveObservedProviders = useCallback(async () => {
+    const providers: EventedEip1193Provider[] = [];
+    if (activeConnector) {
       try {
-        await provider.send('wallet_switchEthereumChain', [{ chainId: desiredChainHex }]);
-      } catch (switchError) {
-        if (isUnrecognizedChainError(switchError)) {
-          const rpcUrl = process.env.NEXT_PUBLIC_CHAINPROOF_RPC_URL || 'http://127.0.0.1:8545';
-          await provider.send('wallet_addEthereumChain', [
-            {
-              chainId: desiredChainHex,
-              chainName: `ChainProof Local (${configuredChainId})`,
-              nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-              rpcUrls: [rpcUrl],
-            },
-          ]);
-          await provider.send('wallet_switchEthereumChain', [{ chainId: desiredChainHex }]);
-        } else {
-          throw switchError;
+        const connectorProvider = (await activeConnector.getProvider()) as EventedEip1193Provider | undefined;
+        if (connectorProvider) {
+          providers.push(connectorProvider);
+        }
+      } catch {
+        // best effort
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      const windowEthereum = (window as Window & { ethereum?: EventedEip1193Provider }).ethereum;
+      if (windowEthereum?.providers?.length) {
+        for (const candidate of windowEthereum.providers) {
+          if (candidate) {
+            providers.push(candidate);
+          }
         }
       }
-    },
-    []
-  );
+      if (windowEthereum) {
+        providers.push(windowEthereum);
+      }
+    }
+
+    const deduped: EventedEip1193Provider[] = [];
+    const seen = new Set<EventedEip1193Provider>();
+    for (const provider of providers) {
+      if (seen.has(provider)) continue;
+      seen.add(provider);
+      deduped.push(provider);
+    }
+    return deduped;
+  }, [activeConnector]);
 
   const hydrateAccountState = useCallback(
     async (session: {
@@ -191,21 +284,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       chainId: number;
       source: 'wallet' | 'manual';
     }) => {
-      let settledChainId = session.chainId;
-      if (session.source === 'wallet') {
-        try {
-          await ensureConfiguredWalletChain(session.provider as BrowserProvider);
-          const refreshedNetwork = await (session.provider as BrowserProvider).getNetwork();
-          settledChainId = Number(refreshedNetwork.chainId);
-        } catch (chainError) {
-          settledChainId = session.chainId;
-          setError(
-            chainError instanceof Error
-              ? chainError.message
-              : `Unable to switch wallet to required chain ${configuredChainId}.`
-          );
-        }
-      }
+      const settledChainId = session.chainId;
 
       setAccount(session.address);
       setChainId(settledChainId);
@@ -239,7 +318,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         setStatus('connected');
       }
     },
-    [ensureConfiguredWalletChain]
+    []
   );
 
   const refreshWalletState = useCallback(async () => {
@@ -251,30 +330,56 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       try {
         setError(null);
 
-        if (isConnected && connectedAddress) {
-          const normalizedConnectedAddress = normalizeAddress(connectedAddress);
+        let passiveSnapshot: { address: string | null; chainId: number | null } | null = null;
+        if (activeConnector) {
+          try {
+            const connectorProvider = (await activeConnector.getProvider()) as EventedEip1193Provider | undefined;
+            passiveSnapshot = await readPassiveProviderSnapshot(connectorProvider);
+          } catch {
+            passiveSnapshot = null;
+          }
+        }
+
+        const effectiveConnectedAddress = passiveSnapshot?.address ?? connectedAddress ?? null;
+        const effectiveChainId = passiveSnapshot?.chainId ?? null;
+        const runtimeAddress = effectiveConnectedAddress ?? connectedAddress ?? null;
+
+        if (isConnected || effectiveConnectedAddress) {
+          const normalizedConnectedAddress = normalizeAddress(effectiveConnectedAddress);
           const connectorClientAddress = normalizeAddress(connectorClient?.account?.address);
           const connectorClientMatches = Boolean(
             connectorClient && connectorClientAddress && connectorClientAddress === normalizedConnectedAddress
           );
+          const useConnectorClientRuntime = connectorClientMatches && Boolean(connectorClient);
 
           if (connectorClient && !connectorClientMatches) {
             // Avoid stale signer usage during wallet account switch races.
             setActiveWalletSession(null);
           }
 
-          const runtime = connectorClientMatches && connectorClient
+          const runtime = useConnectorClientRuntime && connectorClient
             ? walletClientToRuntimeSession(connectorClient)
-            : activeConnector
-              ? await runtimeSessionFromConnector(activeConnector, connectedAddress)
+            : activeConnector && runtimeAddress
+              ? await runtimeSessionFromConnector(activeConnector, runtimeAddress)
               : null;
           if (!runtime) {
             setStatus('error');
             setError('Wallet connected, but signer session is unavailable. Please reconnect.');
-            setAccount(connectedAddress);
+            setAccount(effectiveConnectedAddress);
             return;
           }
-          await hydrateAccountState({ ...runtime, source: 'wallet' });
+          const settledAddress = useConnectorClientRuntime
+            ? runtime.address
+            : (effectiveConnectedAddress ?? runtime.address);
+          const settledChainId = useConnectorClientRuntime
+            ? runtime.chainId
+            : (effectiveChainId ?? runtime.chainId);
+          await hydrateAccountState({
+            ...runtime,
+            address: settledAddress,
+            chainId: settledChainId,
+            source: 'wallet',
+          });
           return;
         }
 
@@ -313,7 +418,12 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       setStatus('connecting');
       setError(null);
       try {
-        await connectAsync({ connector });
+        const connectArgs = Number.isFinite(configuredChainId) && configuredChainId > 0
+          ? { connector, chainId: configuredChainId }
+          : { connector };
+        await connectAsync(connectArgs);
+        await ensureConfiguredWalletChain(connector);
+        await refreshWalletState();
       } catch (err) {
         if (isRecoverableConnectorError(err)) {
           // iOS app-switch can report recoverable connector races.
@@ -385,6 +495,11 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     clearAuthState();
   }, [clearAuthState, disconnectAsync]);
 
+  const syncMobileWalletAccount = useCallback(async () => {
+    setError(null);
+    await refreshWalletState();
+  }, [refreshWalletState]);
+
   const assignMyRole = useCallback(
     async (targetRole: Exclude<AppRole, 'none'>) => {
       try {
@@ -415,32 +530,132 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    if (isMobileWalletSyncTarget()) {
+      return;
+    }
     void reconnectAsync().finally(() => {
       void refreshWalletState();
     });
   }, [reconnectAsync, refreshWalletState]);
 
   useEffect(() => {
+    if (isMobileWalletSyncTarget()) {
+      return;
+    }
     void refreshWalletState();
   }, [refreshWalletState, connectedAddress, connectorClient, activeConnector]);
 
   useEffect(() => {
+    if (!isDesktopWalletSyncTarget()) {
+      return;
+    }
+
+    const FOREGROUND_REFRESH_DEBOUNCE_MS = 700;
+    const VISIBLE_TAB_SYNC_INTERVAL_MS = 1500;
+
+    const maybeRefreshOnForeground = async () => {
+      const now = Date.now();
+      if (now - lastForegroundRefreshRef.current < FOREGROUND_REFRESH_DEBOUNCE_MS) {
+        return;
+      }
+      lastForegroundRefreshRef.current = now;
+
+      const observedProviders = await resolveObservedProviders();
+      let requiresRefresh = observedProviders.length === 0;
+      for (const provider of observedProviders) {
+        const snapshot = await readPassiveProviderSnapshot(provider);
+        if (!snapshot) {
+          continue;
+        }
+        const currentAddress = normalizeAddress(connectedAddress);
+        const snapshotAddress = normalizeAddress(snapshot.address);
+        const chainMatches = snapshot.chainId !== null && chainId !== null
+          ? snapshot.chainId === chainId
+          : snapshot.chainId === chainId;
+        const addressMatches = currentAddress === snapshotAddress;
+        if (!addressMatches || !chainMatches) {
+          requiresRefresh = true;
+          break;
+        }
+        requiresRefresh = false;
+      }
+
+      if (requiresRefresh) {
+        await refreshWalletState();
+      }
+    };
+
     const onFocus = () => {
-      void refreshWalletState();
+      void maybeRefreshOnForeground();
     };
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void refreshWalletState();
+        void maybeRefreshOnForeground();
       }
     };
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+      void maybeRefreshOnForeground();
+    }, VISIBLE_TAB_SYNC_INTERVAL_MS);
 
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
+      window.clearInterval(intervalId);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [refreshWalletState]);
+  }, [chainId, connectedAddress, refreshWalletState, resolveObservedProviders]);
+
+  useEffect(() => {
+    if (!isDesktopWalletSyncTarget()) {
+      return;
+    }
+    let disposed = false;
+    const removers: Array<() => void> = [];
+
+    const attachListeners = async () => {
+      if (!activeConnector && typeof window === 'undefined') return;
+      try {
+        const observedProviders = await resolveObservedProviders();
+        if (disposed || observedProviders.length === 0) return;
+
+        for (const provider of observedProviders) {
+          const onAccountsChanged = () => {
+            void refreshWalletState();
+          };
+          const onChainChanged = () => {
+            void refreshWalletState();
+          };
+          const onDisconnect = () => {
+            void refreshWalletState();
+          };
+
+          provider.on?.('accountsChanged', onAccountsChanged);
+          provider.on?.('chainChanged', onChainChanged);
+          provider.on?.('disconnect', onDisconnect);
+
+          removers.push(() => provider.removeListener?.('accountsChanged', onAccountsChanged));
+          removers.push(() => provider.removeListener?.('chainChanged', onChainChanged));
+          removers.push(() => provider.removeListener?.('disconnect', onDisconnect));
+        }
+      } catch {
+        // Listener attachment is best-effort.
+      }
+    };
+
+    void attachListeners();
+
+    return () => {
+      disposed = true;
+      for (const remove of removers) {
+        remove();
+      }
+    };
+  }, [activeConnector, refreshWalletState, resolveObservedProviders]);
 
   const value = useMemo<WalletAuthContextValue>(
     () => ({
@@ -458,6 +673,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       connectWalletWith,
       disconnectWallet,
       refreshWalletState,
+      syncMobileWalletAccount,
       assignMyRole,
     }),
     [
@@ -473,6 +689,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       connectWalletWith,
       disconnectWallet,
       refreshWalletState,
+      syncMobileWalletAccount,
       assignMyRole,
     ]
   );

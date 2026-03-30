@@ -60,7 +60,7 @@ function LoginPageContent() {
 
   const redirectReasonMessage = useMemo(() => {
     if (redirectReason === 'wrong_chain') {
-      return 'Wallet session was detected on the wrong network. Switch chain in MetaMask and reconnect.';
+      return 'Wallet session was detected on the wrong network. Tap WalletConnect to auto-recover to the ChainProof network.';
     }
     if (redirectReason === 'session_timeout') {
       return 'Wallet session check took too long. Please reconnect to continue NFC flow.';
@@ -212,7 +212,7 @@ function LoginPageContent() {
 
             {status === 'wrong_chain' && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                Connected wallet is on the wrong chain. Switch to the configured ChainProof network and retry.
+                Connected wallet is on the wrong chain. Tap WalletConnect and approve the chain switch/add prompt to recover automatically.
               </div>
             )}
 
