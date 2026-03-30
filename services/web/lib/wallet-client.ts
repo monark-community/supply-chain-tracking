@@ -24,26 +24,27 @@ export const chainproofChain: Chain = {
   },
 };
 
-const connectors = [
-  injected({
-    shimDisconnect: true,
-  }),
-];
-
-if (walletConnectProjectId) {
-  connectors.push(
-    walletConnect({
-      projectId: walletConnectProjectId,
-      showQrModal: true,
-      metadata: {
-        name: 'ChainProof',
-        description: 'Supply-chain traceability wallet login',
-        url: typeof window !== 'undefined' ? window.location.origin : 'https://chainproof.local',
-        icons: ['https://avatars.githubusercontent.com/u/37784886'],
-      },
-    })
-  );
-}
+const connectors = walletConnectProjectId
+  ? [
+      injected({
+        shimDisconnect: true,
+      }),
+      walletConnect({
+        projectId: walletConnectProjectId,
+        showQrModal: true,
+        metadata: {
+          name: 'ChainProof',
+          description: 'Supply-chain traceability wallet login',
+          url: typeof window !== 'undefined' ? window.location.origin : 'https://chainproof.local',
+          icons: ['https://avatars.githubusercontent.com/u/37784886'],
+        },
+      }),
+    ]
+  : [
+      injected({
+        shimDisconnect: true,
+      }),
+    ];
 
 export const wagmiConfig = createConfig({
   chains: [chainproofChain],
