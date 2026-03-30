@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Account, Chain, Client, Transport } from 'viem';
 import { BrowserProvider, JsonRpcSigner } from 'ethers';
@@ -60,6 +60,35 @@ function normalizeAddress(address: string | null | undefined) {
   return (address || '').toLowerCase();
 }
 
+function isAlreadyConnectedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return message.toLowerCase().includes('already connected');
+}
+
+function isRecoverableConnectorError(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  return (
+    message.includes('already connected') ||
+    message.includes('connector already connected') ||
+    message.includes('pending') ||
+    message.includes('resource unavailable')
+  );
+}
+
+function isUnrecognizedChainError(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  return (
+    message.includes('4902') ||
+    message.includes('unrecognized chain') ||
+    message.includes('unknown chain') ||
+    message.includes('wallet_addethereumchain')
+  );
+}
+
+function toHexChainId(chainId: number) {
+  return `0x${Math.max(0, chainId).toString(16)}`;
+}
+
 function walletClientToRuntimeSession(client: Client<Transport, Chain, Account>): RuntimeWalletSession {
   const { account, chain, transport } = client;
   const provider = new BrowserProvider(transport, {
@@ -102,6 +131,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   const [owner, setOwner] = useState<string | null>(null);
   const [contractAddress, setContractAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
 
   const { address: connectedAddress, connector: activeConnector, isConnected } = useAccount();
   const { connectAsync, connectors } = useConnect();
@@ -123,6 +153,36 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     setContractAddress(null);
   }, []);
 
+  const ensureConfiguredWalletChain = useCallback(
+    async (provider: BrowserProvider) => {
+      if (!Number.isFinite(configuredChainId) || configuredChainId <= 0) return;
+      const currentNetwork = await provider.getNetwork();
+      const currentChainId = Number(currentNetwork.chainId);
+      if (currentChainId === configuredChainId) return;
+
+      const desiredChainHex = toHexChainId(configuredChainId);
+      try {
+        await provider.send('wallet_switchEthereumChain', [{ chainId: desiredChainHex }]);
+      } catch (switchError) {
+        if (isUnrecognizedChainError(switchError)) {
+          const rpcUrl = process.env.NEXT_PUBLIC_CHAINPROOF_RPC_URL || 'http://127.0.0.1:8545';
+          await provider.send('wallet_addEthereumChain', [
+            {
+              chainId: desiredChainHex,
+              chainName: `ChainProof Local (${configuredChainId})`,
+              nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+              rpcUrls: [rpcUrl],
+            },
+          ]);
+          await provider.send('wallet_switchEthereumChain', [{ chainId: desiredChainHex }]);
+        } else {
+          throw switchError;
+        }
+      }
+    },
+    []
+  );
+
   const hydrateAccountState = useCallback(
     async (session: {
       provider: ManualWalletContext['provider'] | RuntimeWalletSession['provider'];
@@ -131,17 +191,33 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       chainId: number;
       source: 'wallet' | 'manual';
     }) => {
+      let settledChainId = session.chainId;
+      if (session.source === 'wallet') {
+        try {
+          await ensureConfiguredWalletChain(session.provider as BrowserProvider);
+          const refreshedNetwork = await (session.provider as BrowserProvider).getNetwork();
+          settledChainId = Number(refreshedNetwork.chainId);
+        } catch (chainError) {
+          settledChainId = session.chainId;
+          setError(
+            chainError instanceof Error
+              ? chainError.message
+              : `Unable to switch wallet to required chain ${configuredChainId}.`
+          );
+        }
+      }
+
       setAccount(session.address);
-      setChainId(session.chainId);
+      setChainId(settledChainId);
       setActiveWalletSession({
         provider: session.provider,
         signer: session.signer,
         address: session.address,
-        chainId: session.chainId,
+        chainId: settledChainId,
         source: session.source,
       });
 
-      if (Number.isFinite(configuredChainId) && configuredChainId > 0 && session.chainId !== configuredChainId) {
+      if (Number.isFinite(configuredChainId) && configuredChainId > 0 && settledChainId !== configuredChainId) {
         setRole('none');
         setOwner(null);
         setContractAddress(null);
@@ -163,60 +239,72 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         setStatus('connected');
       }
     },
-    []
+    [ensureConfiguredWalletChain]
   );
 
   const refreshWalletState = useCallback(async () => {
+    if (refreshInFlightRef.current) {
+      await refreshInFlightRef.current;
+      return;
+    }
+    const task = (async () => {
+      try {
+        setError(null);
+
+        if (isConnected && connectedAddress) {
+          const normalizedConnectedAddress = normalizeAddress(connectedAddress);
+          const connectorClientAddress = normalizeAddress(connectorClient?.account?.address);
+          const connectorClientMatches = Boolean(
+            connectorClient && connectorClientAddress && connectorClientAddress === normalizedConnectedAddress
+          );
+
+          if (connectorClient && !connectorClientMatches) {
+            // Avoid stale signer usage during wallet account switch races.
+            setActiveWalletSession(null);
+          }
+
+          const runtime = connectorClientMatches && connectorClient
+            ? walletClientToRuntimeSession(connectorClient)
+            : activeConnector
+              ? await runtimeSessionFromConnector(activeConnector, connectedAddress)
+              : null;
+          if (!runtime) {
+            setStatus('error');
+            setError('Wallet connected, but signer session is unavailable. Please reconnect.');
+            setAccount(connectedAddress);
+            return;
+          }
+          await hydrateAccountState({ ...runtime, source: 'wallet' });
+          return;
+        }
+
+        if (enableManualWalletFallback) {
+          const manualSession = await restoreManualWalletSession();
+          if (manualSession) {
+            await hydrateAccountState({
+              provider: manualSession.provider,
+              signer: manualSession.wallet,
+              address: manualSession.address,
+              chainId: manualSession.chainId,
+              source: 'manual',
+            });
+            return;
+          }
+        }
+
+        setActiveWalletSession(null);
+        clearAuthState();
+      } catch (err) {
+        setActiveWalletSession(null);
+        setStatus('error');
+        setError(err instanceof Error ? err.message : 'Failed to read wallet state.');
+      }
+    })();
+    refreshInFlightRef.current = task;
     try {
-      setError(null);
-
-      if (isConnected && connectedAddress) {
-        const normalizedConnectedAddress = normalizeAddress(connectedAddress);
-        const connectorClientAddress = normalizeAddress(connectorClient?.account?.address);
-        const connectorClientMatches = Boolean(
-          connectorClient && connectorClientAddress && connectorClientAddress === normalizedConnectedAddress
-        );
-
-        if (connectorClient && !connectorClientMatches) {
-          // Avoid stale signer usage during wallet account switch races.
-          setActiveWalletSession(null);
-        }
-
-        const runtime = connectorClientMatches && connectorClient
-          ? walletClientToRuntimeSession(connectorClient)
-          : activeConnector
-            ? await runtimeSessionFromConnector(activeConnector, connectedAddress)
-            : null;
-        if (!runtime) {
-          setStatus('error');
-          setError('Wallet connected, but signer session is unavailable. Please reconnect.');
-          setAccount(connectedAddress);
-          return;
-        }
-        await hydrateAccountState({ ...runtime, source: 'wallet' });
-        return;
-      }
-
-      if (enableManualWalletFallback) {
-        const manualSession = await restoreManualWalletSession();
-        if (manualSession) {
-          await hydrateAccountState({
-            provider: manualSession.provider,
-            signer: manualSession.wallet,
-            address: manualSession.address,
-            chainId: manualSession.chainId,
-            source: 'manual',
-          });
-          return;
-        }
-      }
-
-      setActiveWalletSession(null);
-      clearAuthState();
-    } catch (err) {
-      setActiveWalletSession(null);
-      setStatus('error');
-      setError(err instanceof Error ? err.message : 'Failed to read wallet state.');
+      await task;
+    } finally {
+      refreshInFlightRef.current = null;
     }
   }, [activeConnector, clearAuthState, connectedAddress, connectorClient, hydrateAccountState, isConnected]);
 
@@ -224,9 +312,20 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     async (connector: Connector) => {
       setStatus('connecting');
       setError(null);
-      await connectAsync({ connector });
+      try {
+        await connectAsync({ connector });
+      } catch (err) {
+        if (isRecoverableConnectorError(err)) {
+          // iOS app-switch can report recoverable connector races.
+          await refreshWalletState();
+          return;
+        }
+        setStatus('error');
+        setError(err instanceof Error ? err.message : 'Wallet sign-in failed.');
+        throw err;
+      }
     },
-    [connectAsync]
+    [connectAsync, refreshWalletState]
   );
 
   const connectWalletWith = useCallback(
@@ -324,6 +423,24 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshWalletState();
   }, [refreshWalletState, connectedAddress, connectorClient, activeConnector]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshWalletState();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshWalletState();
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [refreshWalletState]);
 
   const value = useMemo<WalletAuthContextValue>(
     () => ({

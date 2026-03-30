@@ -130,7 +130,7 @@ export function ProducerDashboard() {
               <Link href="/scanner">
                 <Button variant="outline">
                   <QrCode className="mr-2 h-4 w-4" />
-                  Open NFC Console
+                  Open Batch Actions
                 </Button>
               </Link>
             </div>

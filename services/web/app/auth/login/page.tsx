@@ -1,20 +1,27 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Package, Smartphone, Wallet } from 'lucide-react';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { shortenAddress } from '@/lib/wallet-auth';
+import { readPendingNfcScan } from '@/lib/nfc-scan-session';
+
+function isAlreadyConnectedMessage(message: string) {
+  return message.toLowerCase().includes('already connected');
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [privateKey, setPrivateKey] = useState('');
   const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [localError, setLocalError] = useState('');
   const [connectingWalletId, setConnectingWalletId] = useState<string | null>(null);
+  const redirectReason = searchParams.get('reason');
 
   const {
     connectWallet,
@@ -50,6 +57,22 @@ export default function LoginPage() {
     },
     [walletOptions]
   );
+
+  const redirectReasonMessage = useMemo(() => {
+    if (redirectReason === 'wrong_chain') {
+      return 'Wallet session was detected on the wrong network. Switch chain in MetaMask and reconnect.';
+    }
+    if (redirectReason === 'session_timeout') {
+      return 'Wallet session check took too long. Please reconnect to continue NFC flow.';
+    }
+    if (redirectReason === 'session_error') {
+      return 'Wallet session could not be restored. Please reconnect to continue.';
+    }
+    return '';
+  }, [redirectReason]);
+
+  const combinedError = localError || error || '';
+  const showingAlreadyConnectedRecovery = isAlreadyConnectedMessage(combinedError);
 
   const handleWalletLogin = async (walletId: string) => {
     setLocalError('');
@@ -96,8 +119,11 @@ export default function LoginPage() {
       return;
     }
 
+    const pendingScan = readPendingNfcScan();
+    const postAuthRoute = pendingScan?.continueTo || '/';
+
     if (status === 'connected' && role !== 'none') {
-      router.replace('/');
+      router.replace(postAuthRoute);
       return;
     }
 
@@ -122,9 +148,17 @@ export default function LoginPage() {
           </CardHeader>
 
           <CardContent className="space-y-6">
-            {(error || localError) && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{localError || error}</div>
-            )}
+            {combinedError && !showingAlreadyConnectedRecovery ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{combinedError}</div>
+            ) : null}
+            {showingAlreadyConnectedRecovery ? (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+                Wallet already connected. Restoring your session now...
+              </div>
+            ) : null}
+            {redirectReasonMessage ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{redirectReasonMessage}</div>
+            ) : null}
 
             <div className="rounded-lg border-2 border-dashed border-blue-200 bg-blue-50 p-6 text-center">
               <Wallet className="mx-auto h-12 w-12 text-blue-600" />

@@ -23,6 +23,7 @@ export type HarvestProducerBatchInput = {
   quantity: number;
   trackingCode: string;
   ipfsHash?: string;
+  hardwareId?: string;
 };
 
 export type HarvestProducerBatchResult = {
@@ -32,6 +33,7 @@ export type HarvestProducerBatchResult = {
   newBatchId: number | null;
   account: string;
   ipfsHash: string;
+  hardwareId: string | null;
 };
 
 export type InitiateBatchTransferInput = {
@@ -80,6 +82,9 @@ const CHAINPROOF_WRITE_ABI = [
   'function roles(address) view returns (uint8)',
   'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
   'function harvestBatch(string origin, string ipfsHash, uint256 quantity, string trackingCode) returns (uint256 newBatchId)',
+  'function harvestBatchWithHardware(string origin, string ipfsHash, uint256 quantity, string trackingCode, string hardwareId) returns (uint256 newBatchId)',
+  'function bindHardwareIdToBatch(uint256 batchId, string hardwareId)',
+  'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function initiateTransfer(uint256 batchId, address to)',
   'function receiveBatch(uint256 batchId)',
   'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
@@ -245,6 +250,7 @@ function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data:
 export async function harvestProducerBatch(input: HarvestProducerBatchInput): Promise<HarvestProducerBatchResult> {
   const origin = input.origin.trim();
   const trackingCode = input.trackingCode.trim();
+  const hardwareId = input.hardwareId?.trim() || '';
   const quantity = Math.floor(input.quantity);
   const ipfsHash = input.ipfsHash?.trim() || makeTempIpfsHash(trackingCode);
 
@@ -265,7 +271,9 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
       throw new Error('Role not allowed');
     }
 
-    const tx = await context.contract.harvestBatch(origin, ipfsHash, BigInt(quantity), trackingCode);
+    const tx = hardwareId
+      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(quantity), trackingCode, hardwareId)
+      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(quantity), trackingCode);
     const receipt = await tx.wait();
     const newBatchId = getHarvestedBatchId(context.contract, receipt);
 
@@ -276,6 +284,7 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
       newBatchId,
       account: context.account,
       ipfsHash,
+      hardwareId: hardwareId || null,
     };
   } catch (error) {
     throw mapWriteError(error, { roleNotAllowedMessage: 'Connected wallet is not assigned the Producer role.' });

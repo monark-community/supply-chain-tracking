@@ -10,6 +10,7 @@ import { Package, ShieldCheck } from 'lucide-react';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import type { AppRole } from '@/lib/wallet-auth';
 import { shortenAddress } from '@/lib/wallet-auth';
+import { readPendingNfcScan } from '@/lib/nfc-scan-session';
 
 const ASSIGNABLE_ROLES: Array<Exclude<AppRole, 'none' | 'processor' | 'customer'>> = [
   'producer',
@@ -50,12 +51,25 @@ export default function AssignRolePage() {
   };
 
   useEffect(() => {
-    if (!account && status !== 'connecting') {
+    if (status === 'wrong_chain') {
+      router.replace('/auth/login?reason=wrong_chain');
+      return;
+    }
+    if (status === 'error') {
+      router.replace('/auth/login?reason=session_error');
+      return;
+    }
+    if (status === 'disconnected') {
+      router.replace('/auth/login');
+      return;
+    }
+    if (!account && status !== 'connecting' && status !== 'idle') {
       router.replace('/auth/login');
       return;
     }
     if (role !== 'none' && status === 'connected') {
-      router.replace('/');
+      const pendingScan = readPendingNfcScan();
+      router.replace(pendingScan?.continueTo || '/');
     }
   }, [account, role, router, status]);
 

@@ -17,6 +17,7 @@ const CHAINPROOF_READ_ABI = [
   'function roles(address) view returns (uint8)',
   'function batches(uint256) view returns (uint256 id, address creator, string origin, string ipfsHash, uint256 quantity, string trackingCode, uint8 status, uint256 createdAt, uint256 updatedAt, address currentHandler)',
   'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
+  'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function getParentBatches(uint256 batchId) view returns (uint256[])',
   'function getChildBatches(uint256 batchId) view returns (uint256[])',
   'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
@@ -270,6 +271,27 @@ export async function readBatchByTrackingOrId(lookup: string) {
   };
 }
 
+export async function readBatchByHardwareId(hardwareId: string) {
+  const trimmed = hardwareId.trim();
+  if (!trimmed) {
+    throw new Error('Hardware id is required.');
+  }
+  const batchId = await readBatchIdByHardwareId(trimmed);
+  if (!batchId) {
+    throw new Error('No batch is bound to this hardware id.');
+  }
+  return readBatchByTrackingOrId(String(batchId));
+}
+
+export async function readBatchIdByHardwareId(hardwareId: string): Promise<number> {
+  const context = await createChainproofReadContext();
+  const trimmed = hardwareId.trim();
+  if (!trimmed) {
+    throw new Error('Hardware id is required.');
+  }
+  return Number(await context.contract.getBatchIdByHardwareId(trimmed));
+}
+
 export async function readProducerRecentActivity(
   producerAddress: string,
   limit: number = 10
@@ -339,7 +361,11 @@ export async function readTransporterCustodyShipments(
     .filter((item) => item.batchId > 0 && item.currentHandler === address)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, Math.max(0, limit))
-    .map(({ currentHandler: _currentHandler, ...shipment }) => shipment);
+    .map((item) => {
+      const { currentHandler, ...shipment } = item;
+      void currentHandler;
+      return shipment;
+    });
 }
 
 export type WarehouseStorageBatch = TransporterCustodyShipment;

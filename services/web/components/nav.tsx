@@ -20,7 +20,7 @@ const CHANGEABLE_ROLES: Array<Exclude<AppRole, 'none' | 'processor' | 'customer'
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Batches', href: '/batches', icon: MapPin },
-  { name: 'NFC Console', href: '/scanner', icon: QrCode },
+  { name: 'Batch Actions', href: '/scanner', icon: QrCode },
 ];
 
 export function Nav() {

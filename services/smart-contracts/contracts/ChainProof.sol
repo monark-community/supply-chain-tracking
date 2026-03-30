@@ -36,6 +36,7 @@ contract ChainProof {
     mapping(uint256 => Batch) public batches;
     mapping(uint256 => address) public pendingRecipients;
     mapping(bytes32 => uint256) private trackingCodeToBatch;
+    mapping(bytes32 => uint256) private hardwareIdToBatch;
     mapping(uint256 => uint256[]) private parentBatchIds;
     mapping(uint256 => uint256[]) private childBatchIds;
 
@@ -83,6 +84,13 @@ contract ChainProof {
         uint256 timestamp
     );
     event BatchConsumed(uint256 indexed id, address indexed handler, uint256 timestamp);
+    event HardwareBound(
+        bytes32 indexed hardwareHash,
+        string hardwareId,
+        uint256 indexed batchId,
+        address indexed boundBy,
+        uint256 timestamp
+    );
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
@@ -150,6 +158,43 @@ contract ChainProof {
             trackingCode,
             block.timestamp
         );
+    }
+
+    function harvestBatchWithHardware(
+        string calldata origin,
+        string calldata ipfsHash,
+        uint256 quantity,
+        string calldata trackingCode,
+        string calldata hardwareId
+    ) external onlyRole(Role.Producer) returns (uint256 newBatchId) {
+        require(quantity > 0, "Quantity must be greater than zero");
+        newBatchId = _createBatch(
+            msg.sender,
+            origin,
+            ipfsHash,
+            quantity,
+            trackingCode
+        );
+        _bindHardwareId(newBatchId, hardwareId);
+        emit BatchHarvested(
+            newBatchId,
+            msg.sender,
+            quantity,
+            trackingCode,
+            block.timestamp
+        );
+    }
+
+    function bindHardwareIdToBatch(
+        uint256 batchId,
+        string calldata hardwareId
+    )
+        external
+        onlyRole(Role.Producer)
+        onlyExistingBatch(batchId)
+        onlyCurrentHandler(batchId)
+    {
+        _bindHardwareId(batchId, hardwareId);
     }
 
     function splitBatch(
@@ -325,6 +370,15 @@ contract ChainProof {
         return trackingCodeToBatch[keccak256(bytes(trackingCode))];
     }
 
+    function getBatchIdByHardwareId(
+        string calldata hardwareId
+    ) external view returns (uint256) {
+        if (bytes(hardwareId).length == 0) {
+            return 0;
+        }
+        return hardwareIdToBatch[keccak256(bytes(hardwareId))];
+    }
+
     function _deriveBatchFromInputs(
         uint256[] calldata inputBatchIds,
         string calldata outputOrigin,
@@ -417,6 +471,13 @@ contract ChainProof {
         bytes32 trackingHash = keccak256(bytes(trackingCode));
         require(trackingCodeToBatch[trackingHash] == 0, "Tracking code already used");
         trackingCodeToBatch[trackingHash] = batchId;
+    }
+
+    function _bindHardwareId(uint256 batchId, string memory hardwareId) internal {
+        require(bytes(hardwareId).length > 0, "Hardware id is required");
+        bytes32 hardwareHash = keccak256(bytes(hardwareId));
+        hardwareIdToBatch[hardwareHash] = batchId;
+        emit HardwareBound(hardwareHash, hardwareId, batchId, msg.sender, block.timestamp);
     }
 
     function _isValidTransfer(
