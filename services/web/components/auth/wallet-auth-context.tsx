@@ -417,17 +417,67 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     async (connector: Connector) => {
       setStatus('connecting');
       setError(null);
+      const connectArgs = Number.isFinite(configuredChainId) && configuredChainId > 0
+        ? { connector, chainId: configuredChainId }
+        : { connector };
+
+      const disconnectAndClearSession = async () => {
+        try {
+          await disconnectAsync();
+        } catch {
+          // keep connector handoff resilient
+        }
+        setActiveWalletSession(null);
+      };
+
+      const handoffIfDifferentConnector = async () => {
+        if (activeConnector && activeConnector.id !== connector.id) {
+          await disconnectAndClearSession();
+        }
+      };
+
+      const refreshFromTappedConnector = async () => {
+        try {
+          const connectorProvider = (await connector.getProvider()) as EventedEip1193Provider | undefined;
+          const snapshot = await readPassiveProviderSnapshot(connectorProvider);
+          if (!snapshot?.address) {
+            await refreshWalletState();
+            return;
+          }
+          const runtime = await runtimeSessionFromConnector(connector, snapshot.address);
+          if (!runtime) {
+            await refreshWalletState();
+            return;
+          }
+          await hydrateAccountState({
+            ...runtime,
+            address: snapshot.address ?? runtime.address,
+            chainId: snapshot.chainId ?? runtime.chainId,
+            source: 'wallet',
+          });
+        } catch {
+          await refreshWalletState();
+        }
+      };
+
       try {
-        const connectArgs = Number.isFinite(configuredChainId) && configuredChainId > 0
-          ? { connector, chainId: configuredChainId }
-          : { connector };
+        await handoffIfDifferentConnector();
         await connectAsync(connectArgs);
         await ensureConfiguredWalletChain(connector);
-        await refreshWalletState();
+        await refreshFromTappedConnector();
       } catch (err) {
         if (isRecoverableConnectorError(err)) {
-          // iOS app-switch can report recoverable connector races.
-          await refreshWalletState();
+          // Connector state can be stale after account switch; force a clean handoff.
+          await disconnectAndClearSession();
+          try {
+            await connectAsync(connectArgs);
+          } catch (retryErr) {
+            if (!isRecoverableConnectorError(retryErr)) {
+              throw retryErr;
+            }
+          }
+          await ensureConfiguredWalletChain(connector);
+          await refreshFromTappedConnector();
           return;
         }
         setStatus('error');
@@ -435,7 +485,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         throw err;
       }
     },
-    [connectAsync, refreshWalletState]
+    [activeConnector, connectAsync, disconnectAsync, hydrateAccountState, refreshWalletState]
   );
 
   const connectWalletWith = useCallback(
