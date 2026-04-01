@@ -77,7 +77,7 @@ def batch_from_tuple(batch_tuple):
         "creator": batch_tuple[1],
         "origin": batch_tuple[2],
         "ipfs_hash": batch_tuple[3],
-        "quantity": int(batch_tuple[4]),
+        "weight": int(batch_tuple[4]),
         "tracking_code": batch_tuple[5],
         "status": int(batch_tuple[6]),
         "created_at": int(batch_tuple[7]),
@@ -304,11 +304,11 @@ if os.path.exists(abi_file_path):
                     if tab_name == "Harvest":
                         origin = st.text_input("Origin", "Ethiopia - Yirgacheffe", key="harvest_origin")
                         ipfs_hash = st.text_input("IPFS Hash", "QmHarvest...", key="harvest_ipfs")
-                        quantity = st.number_input(
-                            "Quantity",
+                        weight = st.number_input(
+                            "Weight (kg)",
                             min_value=1,
                             step=1,
-                            key="harvest_quantity",
+                            key="harvest_weight",
                         )
                         tracking_code = st.text_input(
                             "Tracking Code",
@@ -321,7 +321,7 @@ if os.path.exists(abi_file_path):
                                     contract.functions.harvestBatch(
                                         origin,
                                         ipfs_hash,
-                                        int(quantity),
+                                        int(weight),
                                         tracking_code,
                                     ),
                                     my_address,
@@ -339,10 +339,10 @@ if os.path.exists(abi_file_path):
                             step=1,
                             key="split_parent_id",
                         )
-                        quantities_raw = st.text_input(
-                            "Child Quantities (comma-separated)",
+                        weights_raw = st.text_input(
+                            "Child Weights (comma-separated)",
                             "40,60",
-                            key="split_quantities",
+                            key="split_weights",
                         )
                         ipfs_raw = st.text_input(
                             "Child IPFS Hashes (comma-separated)",
@@ -356,12 +356,12 @@ if os.path.exists(abi_file_path):
                         )
                         if st.button("Split Batch", key="split_submit"):
                             try:
-                                quantities = parse_uint_list(quantities_raw)
+                                weights = parse_uint_list(weights_raw)
                                 hashes = parse_string_list(ipfs_raw)
                                 codes = parse_string_list(tracking_raw)
                                 tx_call = contract.functions.splitBatch(
                                     int(parent_id),
-                                    quantities,
+                                    weights,
                                     hashes,
                                     codes,
                                 )
@@ -391,11 +391,11 @@ if os.path.exists(abi_file_path):
                             "QmTransformOutput",
                             key="transform_ipfs",
                         )
-                        output_qty = st.number_input(
-                            "Output Quantity",
+                        output_weight = st.number_input(
+                            "Output Weight (kg)",
                             min_value=1,
                             step=1,
-                            key="transform_quantity",
+                            key="transform_weight",
                         )
                         output_tracking = st.text_input(
                             "Output Tracking Code",
@@ -415,7 +415,7 @@ if os.path.exists(abi_file_path):
                                         input_ids,
                                         output_origin,
                                         output_ipfs,
-                                        int(output_qty),
+                                        int(output_weight),
                                         output_tracking,
                                         process_type,
                                     ),
@@ -443,11 +443,11 @@ if os.path.exists(abi_file_path):
                             "QmMergeOutput",
                             key="merge_ipfs",
                         )
-                        output_qty = st.number_input(
-                            "Output Quantity",
+                        output_weight = st.number_input(
+                            "Output Weight (kg)",
                             min_value=1,
                             step=1,
-                            key="merge_quantity",
+                            key="merge_weight",
                         )
                         output_tracking = st.text_input(
                             "Output Tracking Code",
@@ -462,7 +462,7 @@ if os.path.exists(abi_file_path):
                                         input_ids,
                                         output_origin,
                                         output_ipfs,
-                                        int(output_qty),
+                                        int(output_weight),
                                         output_tracking,
                                     ),
                                     my_address,
@@ -569,7 +569,7 @@ if os.path.exists(abi_file_path):
                         f"""
                         ### Batch #{batch_data["id"]}
                         - **Origin:** {batch_data["origin"]}
-                        - **Quantity:** {batch_data["quantity"]}
+                        - **Weight:** {batch_data["weight"]} kg
                         - **Tracking Code:** {batch_data["tracking_code"] or "N/A"}
                         - **Status:** {STATUS_LABELS.get(batch_data["status"], "Unknown")}
                         - **Current Handler:** {handler_role} (`{short_addr(batch_data["current_handler"])}`)

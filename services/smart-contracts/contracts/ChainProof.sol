@@ -21,7 +21,7 @@ contract ChainProof {
         address creator;
         string origin;
         string ipfsHash;
-        uint256 quantity;
+        uint256 weight;
         string trackingCode;
         BatchStatus status;
         uint256 createdAt;
@@ -49,7 +49,7 @@ contract ChainProof {
     event BatchHarvested(
         uint256 indexed id,
         address indexed creator,
-        uint256 quantity,
+        uint256 weight,
         string trackingCode,
         uint256 timestamp
     );
@@ -140,21 +140,21 @@ contract ChainProof {
     function harvestBatch(
         string calldata origin,
         string calldata ipfsHash,
-        uint256 quantity,
+        uint256 weight,
         string calldata trackingCode
     ) external onlyRole(Role.Producer) returns (uint256 newBatchId) {
-        require(quantity > 0, "Quantity must be greater than zero");
+        require(weight > 0, "Weight must be greater than zero");
         newBatchId = _createBatch(
             msg.sender,
             origin,
             ipfsHash,
-            quantity,
+            weight,
             trackingCode
         );
         emit BatchHarvested(
             newBatchId,
             msg.sender,
-            quantity,
+            weight,
             trackingCode,
             block.timestamp
         );
@@ -163,23 +163,23 @@ contract ChainProof {
     function harvestBatchWithHardware(
         string calldata origin,
         string calldata ipfsHash,
-        uint256 quantity,
+        uint256 weight,
         string calldata trackingCode,
         string calldata hardwareId
     ) external onlyRole(Role.Producer) returns (uint256 newBatchId) {
-        require(quantity > 0, "Quantity must be greater than zero");
+        require(weight > 0, "Weight must be greater than zero");
         newBatchId = _createBatch(
             msg.sender,
             origin,
             ipfsHash,
-            quantity,
+            weight,
             trackingCode
         );
         _bindHardwareId(newBatchId, hardwareId);
         emit BatchHarvested(
             newBatchId,
             msg.sender,
-            quantity,
+            weight,
             trackingCode,
             block.timestamp
         );
@@ -199,7 +199,7 @@ contract ChainProof {
 
     function splitBatch(
         uint256 parentId,
-        uint256[] calldata childQuantities,
+        uint256[] calldata childWeights,
         string[] calldata childIpfsHashes,
         string[] calldata childTrackingCodes
     )
@@ -210,11 +210,11 @@ contract ChainProof {
         returns (uint256[] memory newChildIds)
     {
         require(
-            childQuantities.length > 1,
+            childWeights.length > 1,
             "Split must create at least two child batches"
         );
         require(
-            childQuantities.length == childIpfsHashes.length &&
+            childWeights.length == childIpfsHashes.length &&
                 childIpfsHashes.length == childTrackingCodes.length,
             "Input lengths mismatch"
         );
@@ -223,31 +223,31 @@ contract ChainProof {
             "Parent batch already consumed"
         );
 
-        uint256 totalChildQuantity = 0;
+        uint256 totalChildWeight = 0;
         uint256 index = 0;
-        while (index < childQuantities.length) {
+        while (index < childWeights.length) {
             require(
-                childQuantities[index] > 0,
-                "Child quantity must be greater than zero"
+                childWeights[index] > 0,
+                "Child weight must be greater than zero"
             );
-            totalChildQuantity += childQuantities[index];
+            totalChildWeight += childWeights[index];
             index++;
         }
 
         Batch storage parentBatch = batches[parentId];
         require(
-            totalChildQuantity == parentBatch.quantity,
-            "Split quantities must match parent quantity"
+            totalChildWeight == parentBatch.weight,
+            "Split weights must match parent weight"
         );
 
-        newChildIds = new uint256[](childQuantities.length);
+        newChildIds = new uint256[](childWeights.length);
         index = 0;
-        while (index < childQuantities.length) {
+        while (index < childWeights.length) {
             uint256 childId = _createBatch(
                 msg.sender,
                 parentBatch.origin,
                 childIpfsHashes[index],
-                childQuantities[index],
+                childWeights[index],
                 childTrackingCodes[index]
             );
             parentBatchIds[childId].push(parentId);
@@ -264,7 +264,7 @@ contract ChainProof {
         uint256[] calldata inputBatchIds,
         string calldata outputOrigin,
         string calldata outputIpfsHash,
-        uint256 outputQuantity,
+        uint256 outputWeight,
         string calldata outputTrackingCode,
         string calldata processType
     )
@@ -276,7 +276,7 @@ contract ChainProof {
             inputBatchIds,
             outputOrigin,
             outputIpfsHash,
-            outputQuantity,
+            outputWeight,
             outputTrackingCode
         );
 
@@ -293,7 +293,7 @@ contract ChainProof {
         uint256[] calldata inputBatchIds,
         string calldata outputOrigin,
         string calldata outputIpfsHash,
-        uint256 outputQuantity,
+        uint256 outputWeight,
         string calldata outputTrackingCode
     )
         external
@@ -305,7 +305,7 @@ contract ChainProof {
             inputBatchIds,
             outputOrigin,
             outputIpfsHash,
-            outputQuantity,
+            outputWeight,
             outputTrackingCode
         );
 
@@ -383,16 +383,16 @@ contract ChainProof {
         uint256[] calldata inputBatchIds,
         string calldata outputOrigin,
         string calldata outputIpfsHash,
-        uint256 outputQuantity,
+        uint256 outputWeight,
         string calldata outputTrackingCode
     ) internal returns (uint256 outputBatchId) {
         require(
             inputBatchIds.length > 0,
             "At least one input batch is required"
         );
-        require(outputQuantity > 0, "Output quantity must be greater than zero");
+        require(outputWeight > 0, "Output weight must be greater than zero");
 
-        uint256 totalInputQuantity = 0;
+        uint256 totalInputWeight = 0;
         uint256 index = 0;
         while (index < inputBatchIds.length) {
             uint256 inputId = inputBatchIds[index];
@@ -405,19 +405,19 @@ contract ChainProof {
                 batches[inputId].currentHandler == msg.sender,
                 "Only current handler can process input batch"
             );
-            totalInputQuantity += batches[inputId].quantity;
+            totalInputWeight += batches[inputId].weight;
             index++;
         }
         require(
-            totalInputQuantity == outputQuantity,
-            "Output quantity must match total input quantity"
+            totalInputWeight == outputWeight,
+            "Output weight must match total input weight"
         );
 
         outputBatchId = _createBatch(
             msg.sender,
             outputOrigin,
             outputIpfsHash,
-            outputQuantity,
+            outputWeight,
             outputTrackingCode
         );
 
@@ -435,7 +435,7 @@ contract ChainProof {
         address creator,
         string memory origin,
         string memory ipfsHash,
-        uint256 quantity,
+        uint256 weight,
         string memory trackingCode
     ) internal returns (uint256 newBatchId) {
         batchCount++;
@@ -446,7 +446,7 @@ contract ChainProof {
             creator: creator,
             origin: origin,
             ipfsHash: ipfsHash,
-            quantity: quantity,
+            weight: weight,
             trackingCode: trackingCode,
             status: BatchStatus.Active,
             createdAt: block.timestamp,

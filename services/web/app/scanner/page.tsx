@@ -29,7 +29,7 @@ export default function ScannerPage() {
 
   const [origin, setOrigin] = useState('');
   const [trackingCode, setTrackingCode] = useState('');
-  const [quantityInput, setQuantityInput] = useState('');
+  const [weightInput, setWeightInput] = useState('');
   const [hardwareIdInput, setHardwareIdInput] = useState('');
   const [harvestSubmitting, setHarvestSubmitting] = useState(false);
   const [harvestFeedback, setHarvestFeedback] = useState<TxFeedback | null>(null);
@@ -69,12 +69,12 @@ export default function ScannerPage() {
     setHarvestSubmitting(true);
     setHarvestFeedback(null);
     try {
-      const quantity = Number(quantityInput);
+      const weight = Number(weightInput);
       const hardwareId = hardwareIdInput.trim();
       if (!hardwareId) throw new Error('Hardware id is required for producer harvest binding.');
       const result = await harvestProducerBatch({
         origin,
-        quantity,
+        weight,
         trackingCode,
         hardwareId,
       });
@@ -100,7 +100,7 @@ export default function ScannerPage() {
       }
       setOrigin('');
       setTrackingCode('');
-      setQuantityInput('');
+      setWeightInput('');
     } catch (errorObj) {
       setHarvestFeedback({
         type: 'error',
@@ -267,12 +267,12 @@ export default function ScannerPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="producer-quantity">Weight (kg)</Label>
+              <Label htmlFor="producer-weight">Weight (kg)</Label>
               <Input
-                id="producer-quantity"
+                id="producer-weight"
                 type="number"
-                value={quantityInput}
-                onChange={(event) => setQuantityInput(event.target.value)}
+                value={weightInput}
+                onChange={(event) => setWeightInput(event.target.value)}
                 placeholder="e.g., 100"
                 min={1}
                 disabled={harvestSubmitting}

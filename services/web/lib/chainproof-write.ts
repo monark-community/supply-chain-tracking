@@ -20,7 +20,7 @@ type BatchHarvestedArgs = {
 
 export type HarvestProducerBatchInput = {
   origin: string;
-  quantity: number;
+  weight: number;
   trackingCode: string;
   ipfsHash?: string;
   hardwareId?: string;
@@ -81,13 +81,13 @@ type ChainproofWriteContext = {
 const CHAINPROOF_WRITE_ABI = [
   'function roles(address) view returns (uint8)',
   'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
-  'function harvestBatch(string origin, string ipfsHash, uint256 quantity, string trackingCode) returns (uint256 newBatchId)',
-  'function harvestBatchWithHardware(string origin, string ipfsHash, uint256 quantity, string trackingCode, string hardwareId) returns (uint256 newBatchId)',
+  'function harvestBatch(string origin, string ipfsHash, uint256 weight, string trackingCode) returns (uint256 newBatchId)',
+  'function harvestBatchWithHardware(string origin, string ipfsHash, uint256 weight, string trackingCode, string hardwareId) returns (uint256 newBatchId)',
   'function bindHardwareIdToBatch(uint256 batchId, string hardwareId)',
   'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function initiateTransfer(uint256 batchId, address to)',
   'function receiveBatch(uint256 batchId)',
-  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
+  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 weight, string trackingCode, uint256 timestamp)',
   'event BatchTransferInitiated(uint256 indexed id, address indexed from, address indexed to, uint256 timestamp)',
   'event BatchReceived(uint256 indexed id, address indexed receiver, uint256 timestamp)',
 ] as const;
@@ -133,8 +133,8 @@ function mapWriteError(
   if (lowered.includes('tracking code already used')) {
     return new Error('Tracking code is already used. Choose a unique code.');
   }
-  if (lowered.includes('quantity must be greater than zero')) {
-    return new Error('Quantity must be greater than zero.');
+  if (lowered.includes('weight must be greater than zero')) {
+    return new Error('Weight must be greater than zero.');
   }
   if (lowered.includes('insufficient funds')) {
     return new Error('Wallet has insufficient funds for gas.');
@@ -251,7 +251,7 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
   const origin = input.origin.trim();
   const trackingCode = input.trackingCode.trim();
   const hardwareId = input.hardwareId?.trim() || '';
-  const quantity = Math.floor(input.quantity);
+  const weight = Math.floor(input.weight);
   const ipfsHash = input.ipfsHash?.trim() || makeTempIpfsHash(trackingCode);
 
   if (!origin) {
@@ -260,8 +260,8 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
   if (!trackingCode) {
     throw new Error('Tracking code is required.');
   }
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    throw new Error('Quantity must be greater than zero.');
+  if (!Number.isFinite(weight) || weight <= 0) {
+    throw new Error('Weight must be greater than zero.');
   }
 
   try {
@@ -272,8 +272,8 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
     }
 
     const tx = hardwareId
-      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(quantity), trackingCode, hardwareId)
-      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(quantity), trackingCode);
+      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), trackingCode, hardwareId)
+      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), trackingCode);
     const receipt = await tx.wait();
     const newBatchId = getHarvestedBatchId(context.contract, receipt);
 

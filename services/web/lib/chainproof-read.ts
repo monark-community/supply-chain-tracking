@@ -15,12 +15,12 @@ const CHAINPROOF_READ_ABI = [
   'function owner() view returns (address)',
   'function batchCount() view returns (uint256)',
   'function roles(address) view returns (uint8)',
-  'function batches(uint256) view returns (uint256 id, address creator, string origin, string ipfsHash, uint256 quantity, string trackingCode, uint8 status, uint256 createdAt, uint256 updatedAt, address currentHandler)',
+  'function batches(uint256) view returns (uint256 id, address creator, string origin, string ipfsHash, uint256 weight, string trackingCode, uint8 status, uint256 createdAt, uint256 updatedAt, address currentHandler)',
   'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
   'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function getParentBatches(uint256 batchId) view returns (uint256[])',
   'function getChildBatches(uint256 batchId) view returns (uint256[])',
-  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
+  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 weight, string trackingCode, uint256 timestamp)',
   'event BatchSplit(uint256 indexed parentId, uint256[] childIds, address indexed handler, uint256 timestamp)',
   'event BatchMerged(uint256[] inputBatchIds, uint256 indexed outputBatchId, address indexed handler, uint256 timestamp)',
   'event BatchTransformed(uint256[] inputBatchIds, uint256 indexed outputBatchId, string processType, address indexed handler, uint256 timestamp)',
@@ -56,7 +56,7 @@ export type TransporterCustodyShipment = {
   batchId: number;
   trackingCode: string;
   origin: string;
-  quantity: number;
+  weight: number;
   status: 'ACTIVE' | 'CONSUMED';
   updatedAt: number;
 };
@@ -176,7 +176,7 @@ export async function readBatchByTrackingOrId(lookup: string) {
     creator: String(batchRaw.creator),
     origin: String(batchRaw.origin),
     ipfsHash: String(batchRaw.ipfsHash),
-    quantity: Number(batchRaw.quantity),
+    weight: Number(batchRaw.weight),
     trackingCode: String(batchRaw.trackingCode),
     status: Number(batchRaw.status),
     createdAt: Number(batchRaw.createdAt),
@@ -353,7 +353,7 @@ export async function readTransporterCustodyShipments(
       batchId: Number(batchRaw.id),
       trackingCode: String(batchRaw.trackingCode),
       origin: String(batchRaw.origin),
-      quantity: Number(batchRaw.quantity),
+      weight: Number(batchRaw.weight),
       status: Number(batchRaw.status) === 0 ? ('ACTIVE' as const) : ('CONSUMED' as const),
       updatedAt: Number(batchRaw.updatedAt),
       currentHandler: String(batchRaw.currentHandler).toLowerCase(),

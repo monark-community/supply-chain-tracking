@@ -25,8 +25,8 @@ type BatchItem = {
   id: string;
   batchNumber: string;
   product: string;
-  quantity: number;
-  currentQuantity: number;
+  weight: number;
+  currentWeight: number;
   status: string;
   currentLocation: string;
   currentCustodian: string;
@@ -48,7 +48,7 @@ type BatchDetails = {
   creator: string;
   origin: string;
   ipfsHash: string;
-  quantity: number;
+  weight: number;
   trackingCode: string;
   status: number;
   createdAt: number;
@@ -159,8 +159,8 @@ export default function BatchesPage() {
         id: String(result.batch.id),
         batchNumber: result.batch.trackingCode || String(result.batch.id),
         product: result.batch.origin || 'Unknown Product',
-        quantity: result.batch.quantity,
-        currentQuantity: result.batch.quantity,
+        weight: result.batch.weight,
+        currentWeight: result.batch.weight,
         status: getStatusLabel(result.batch.status),
         currentLocation: `Chain ${result.chainId}`,
         currentCustodian: shortenAddress(result.batch.currentHandler),
@@ -172,7 +172,7 @@ export default function BatchesPage() {
           creator: result.batch.creator,
           origin: result.batch.origin,
           ipfsHash: result.batch.ipfsHash,
-          quantity: result.batch.quantity,
+          weight: result.batch.weight,
           trackingCode: result.batch.trackingCode,
           status: result.batch.status,
           createdAt: result.batch.createdAt,
@@ -315,8 +315,8 @@ export default function BatchesPage() {
                     <p className="font-medium text-gray-900">{selectedBatch.currentCustodian}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Quantity</p>
-                    <p className="font-medium text-gray-900">{selectedBatch.currentQuantity.toLocaleString()}</p>
+                    <p className="text-gray-500">Weight (kg)</p>
+                    <p className="font-medium text-gray-900">{selectedBatch.currentWeight.toLocaleString()}</p>
                   </div>
                   <div>
                     <p className="text-gray-500">Last Updated</p>
@@ -441,9 +441,9 @@ export default function BatchesPage() {
                           <Package className="h-5 w-5 text-blue-600" />
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Quantity</p>
+                          <p className="text-xs text-gray-500">Weight (kg)</p>
                           <p className="font-medium text-gray-900">
-                            {batch.currentQuantity.toLocaleString()} / {batch.quantity.toLocaleString()}
+                            {batch.currentWeight.toLocaleString()} / {batch.weight.toLocaleString()}
                           </p>
                         </div>
                       </div>
