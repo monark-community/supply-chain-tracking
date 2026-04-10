@@ -2,12 +2,12 @@
 
 import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Package, Shield, Search, Eye } from 'lucide-react';
+import { AlertTriangle, Package, Shield, Search, Eye, Bluetooth } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { receiveTransferredBatch } from '@/lib/chainproof-write';
+import { receiveTransferredBatchById } from '@/lib/chainproof-write';
+import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
+import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type TxFeedback = {
   type: 'success' | 'error';
@@ -16,30 +16,42 @@ type TxFeedback = {
 };
 
 export function CustomerDashboard() {
-  const [receiveLookup, setReceiveLookup] = useState('');
   const [receiveSubmitting, setReceiveSubmitting] = useState(false);
   const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [loadingHardwareBatch, setLoadingHardwareBatch] = useState(false);
+  const { isNfcConnected, isConnecting, nfcDeviceName, connectionError, connectNfcDevice, readActiveBatchIdFromHardware } =
+    useNfcBleBridge();
 
   const recentVerifications = [
     { product: 'Organic Coffee Beans', batch: 'BATCH-A1B2C3', verified: true, time: '5 min ago', origin: 'Green Valley Farms' },
     { product: 'Fair Trade Cocoa', batch: 'BATCH-D4E5F6', verified: true, time: '1 hour ago', origin: 'Ethical Cocoa Co.' },
     { product: 'Premium Tea Leaves', batch: 'BATCH-G7H8I9', verified: true, time: '3 hours ago', origin: 'Mountain Tea Estates' },
   ];
+  const activeBatchEnvAlert = getBatchEnvironmentAlert(activeBatchId);
 
   const handleReceive = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setReceiveSubmitting(true);
     setReceiveFeedback(null);
     try {
-      const result = await receiveTransferredBatch({
-        lookup: receiveLookup,
-      });
+      let batchId = activeBatchId;
+      if (!batchId) {
+        setLoadingHardwareBatch(true);
+        try {
+          batchId = await readActiveBatchIdFromHardware();
+        } finally {
+          setLoadingHardwareBatch(false);
+        }
+      }
+      if (!batchId) throw new Error('No active batch id was found on connected hardware.');
+      setActiveBatchId(batchId);
+      const result = await receiveTransferredBatchById({ batchId });
       setReceiveFeedback({
         type: 'success',
         message: `Batch ${result.batchId} received successfully.`,
         txHash: result.txHash,
       });
-      setReceiveLookup('');
     } catch (error) {
       setReceiveFeedback({
         type: 'error',
@@ -125,15 +137,31 @@ export function CustomerDashboard() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
-            <div className="space-y-2">
-              <Label htmlFor="customer-receive-lookup">Batch ID or tracking code</Label>
-              <Input
-                id="customer-receive-lookup"
-                value={receiveLookup}
-                onChange={(event) => setReceiveLookup(event.target.value)}
-                placeholder="e.g., 12 or BATCH-2026-001"
-                disabled={receiveSubmitting}
-              />
+            <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700">
+              <p className="font-semibold text-slate-900">Hardware required</p>
+              <p className="mt-1">{isNfcConnected ? `Connected: ${nfcDeviceName || 'ESP32 device'}` : 'Not connected'}</p>
+              <p className="mt-1">Active batch ID: {activeBatchId ?? 'Not loaded'}</p>
+              {activeBatchEnvAlert.hasData && activeBatchEnvAlert.breached ? (
+                <p className="mt-1 inline-flex items-center gap-1 text-red-700">
+                  <AlertTriangle className="h-3 w-3" />
+                  {activeBatchEnvAlert.summary}
+                </p>
+              ) : null}
+              {connectionError ? <p className="mt-1 text-red-600">{connectionError}</p> : null}
+              <div className="mt-2 flex gap-2">
+                <Button type="button" variant="outline" onClick={() => void connectNfcDevice()} disabled={isNfcConnected || isConnecting}>
+                  <Bluetooth className="mr-2 h-4 w-4" />
+                  {isConnecting ? 'Connecting...' : isNfcConnected ? 'Connected' : 'Connect'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void readActiveBatchIdFromHardware().then((id) => setActiveBatchId(id))}
+                  disabled={!isNfcConnected || loadingHardwareBatch || receiveSubmitting}
+                >
+                  {loadingHardwareBatch ? 'Reading...' : 'Load Batch From Hardware'}
+                </Button>
+              </div>
             </div>
             {receiveFeedback && (
               <p className={`text-sm ${receiveFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
@@ -141,7 +169,7 @@ export function CustomerDashboard() {
                 {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
               </p>
             )}
-            <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+            <Button className="w-full" disabled={receiveSubmitting || !isNfcConnected || !activeBatchId}>
               {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
             </Button>
           </form>
@@ -151,7 +179,7 @@ export function CustomerDashboard() {
       <Card>
         <CardHeader>
           <CardTitle>Recent Verifications</CardTitle>
-          <CardDescription>Products you have recently looked up</CardDescription>
+          <CardDescription>Batches you have recently looked up</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -180,41 +208,6 @@ export function CustomerDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Customer Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="mb-2 flex items-center font-semibold text-green-700">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Look up batches by ID or tracking code</li>
-                <li>• View shipment journey</li>
-                <li>• Verify authenticity</li>
-                <li>• Check environmental data</li>
-                <li>• See custody history</li>
-                <li>• Receive transferred batches</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="mb-2 flex items-center font-semibold text-red-700">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create products</li>
-                <li>• Create batches</li>
-                <li>• Initiate transfers to others</li>
-                <li>• Log events</li>
-                <li>• Modify any data</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

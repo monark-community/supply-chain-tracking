@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { Nav } from '@/components/nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,17 +16,17 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, Plus, Search, Clock, Package } from 'lucide-react';
-import { harvestProducerBatch } from '@/lib/chainproof-write';
+import { MapPin, Search, Clock, Package, AlertTriangle } from 'lucide-react';
 import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
+import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type BatchItem = {
   id: string;
   batchNumber: string;
   product: string;
-  quantity: number;
-  currentQuantity: number;
+  weight: number;
+  currentWeight: number;
   status: string;
   currentLocation: string;
   currentCustodian: string;
@@ -49,7 +48,7 @@ type BatchDetails = {
   creator: string;
   origin: string;
   ipfsHash: string;
-  quantity: number;
+  weight: number;
   trackingCode: string;
   status: number;
   createdAt: number;
@@ -58,16 +57,6 @@ type BatchDetails = {
   parents: number[];
   children: number[];
   timeline: BatchTimelineEvent[];
-};
-
-type HarvestFeedback = {
-  type: 'success' | 'error';
-  message: string;
-  txHash?: string;
-  newBatchId?: number | null;
-  chainId?: number;
-  contractAddress?: string;
-  ipfsHash?: string;
 };
 
 type TrackFeedback = {
@@ -110,31 +99,18 @@ function getStatusLabel(status: number) {
 }
 
 export default function BatchesPage() {
-  const searchParams = useSearchParams();
-  const { role, account } = useWalletAuth();
-  const isProducer = role === 'producer';
+  const { account } = useWalletAuth();
   const storageKey = useMemo(() => getStorageKey(account), [account]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [hasHydratedStorage, setHasHydratedStorage] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [origin, setOrigin] = useState('');
-  const [quantityInput, setQuantityInput] = useState('');
-  const [trackingCode, setTrackingCode] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState<HarvestFeedback | null>(null);
   const [trackDialogOpen, setTrackDialogOpen] = useState(false);
   const [trackLookup, setTrackLookup] = useState('');
   const [trackingSubmitting, setTrackingSubmitting] = useState(false);
   const [trackFeedback, setTrackFeedback] = useState<TrackFeedback | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<BatchItem | null>(null);
-
-  useEffect(() => {
-    if (isProducer && searchParams.get('action') === 'harvest') {
-      setDialogOpen(true);
-    }
-  }, [searchParams, isProducer]);
+  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     setHasHydratedStorage(false);
@@ -164,87 +140,13 @@ export default function BatchesPage() {
     window.localStorage.setItem(storageKey, JSON.stringify(batches));
   }, [batches, storageKey, hasHydratedStorage]);
 
-  const resetForm = () => {
-    setOrigin('');
-    setQuantityInput('');
-    setTrackingCode('');
-  };
-
-  const handleCreateBatch = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setFeedback(null);
-
-    try {
-      const quantity = Number(quantityInput);
-      const result = await harvestProducerBatch({
-        origin,
-        quantity,
-        trackingCode,
-      });
-
-      setBatches((current) => [
-        {
-          id: result.newBatchId ? String(result.newBatchId) : `new-${Date.now()}`,
-          batchNumber: trackingCode.trim(),
-          product: origin.trim(),
-          quantity,
-          currentQuantity: quantity,
-          status: 'created',
-          currentLocation: 'On-chain harvest',
-          currentCustodian: shortenAddress(result.account),
-          lastUpdate: 'just now',
-          traces: 1,
-          details: result.newBatchId
-            ? {
-                chainId: result.chainId,
-                contractAddress: result.contractAddress,
-                creator: result.account,
-                origin: origin.trim(),
-                ipfsHash: result.ipfsHash,
-                quantity,
-                trackingCode: trackingCode.trim(),
-                status: 0,
-                createdAt: Math.floor(Date.now() / 1000),
-                updatedAt: Math.floor(Date.now() / 1000),
-                currentHandler: result.account,
-                parents: [],
-                children: [],
-                timeline: [
-                  {
-                    type: 'HARVEST',
-                    text: `Harvested by ${result.account}`,
-                    timestamp: Math.floor(Date.now() / 1000),
-                    txHash: result.txHash,
-                  },
-                ],
-              }
-            : undefined,
-        },
-        ...current,
-      ]);
-
-      setFeedback({
-        type: 'success',
-        message: 'Batch harvested on-chain successfully.',
-        txHash: result.txHash,
-        newBatchId: result.newBatchId,
-        chainId: result.chainId,
-        contractAddress: result.contractAddress,
-        ipfsHash: result.ipfsHash,
-      });
-      resetForm();
-      setDialogOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to create batch.';
-      setFeedback({
-        type: 'error',
-        message,
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  useEffect(() => {
+    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
+    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    return () => {
+      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
+    };
+  }, []);
 
   const handleTrackBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -257,8 +159,8 @@ export default function BatchesPage() {
         id: String(result.batch.id),
         batchNumber: result.batch.trackingCode || String(result.batch.id),
         product: result.batch.origin || 'Unknown Product',
-        quantity: result.batch.quantity,
-        currentQuantity: result.batch.quantity,
+        weight: result.batch.weight,
+        currentWeight: result.batch.weight,
         status: getStatusLabel(result.batch.status),
         currentLocation: `Chain ${result.chainId}`,
         currentCustodian: shortenAddress(result.batch.currentHandler),
@@ -270,7 +172,7 @@ export default function BatchesPage() {
           creator: result.batch.creator,
           origin: result.batch.origin,
           ipfsHash: result.batch.ipfsHash,
-          quantity: result.batch.quantity,
+          weight: result.batch.weight,
           trackingCode: result.batch.trackingCode,
           status: result.batch.status,
           createdAt: result.batch.createdAt,
@@ -329,6 +231,11 @@ export default function BatchesPage() {
       batch.product.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const handleStopTrackingBatch = (batchId: string) => {
+    setBatches((current) => current.filter((batch) => batch.id !== batchId));
+    setSelectedBatch((current) => (current?.id === batchId ? null : current));
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Nav />
@@ -339,67 +246,6 @@ export default function BatchesPage() {
             <p className="mt-2 text-gray-600">Current batches you are tracking</p>
           </div>
           <div className="flex items-center gap-2">
-            {isProducer && (
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create Batch
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <form onSubmit={handleCreateBatch}>
-                    <DialogHeader>
-                      <DialogTitle>Create Product Batch</DialogTitle>
-                      <DialogDescription>
-                        Submit a Producer harvest transaction. Temporary IPFS hash will be generated automatically.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="origin">Origin / Product Label</Label>
-                        <Input
-                          id="origin"
-                          value={origin}
-                          onChange={(e) => setOrigin(e.target.value)}
-                          placeholder="e.g., Ethiopia - Yirgacheffe"
-                          disabled={submitting}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="tracking-code">Tracking Code</Label>
-                        <Input
-                          id="tracking-code"
-                          value={trackingCode}
-                          onChange={(e) => setTrackingCode(e.target.value)}
-                          placeholder="e.g., BATCH-2026-001"
-                          disabled={submitting}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="quantity">Quantity</Label>
-                        <Input
-                          id="quantity"
-                          type="number"
-                          value={quantityInput}
-                          onChange={(e) => setQuantityInput(e.target.value)}
-                          placeholder="e.g., 5000"
-                          min={1}
-                          disabled={submitting}
-                        />
-                      </div>
-                    </div>
-                    {feedback?.type === 'error' && <p className="pb-3 text-sm text-red-600">{feedback.message}</p>}
-                    <DialogFooter>
-                      <Button type="submit" disabled={submitting}>
-                        {submitting ? 'Submitting transaction...' : 'Create Batch'}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
-            )}
-
             <Dialog open={trackDialogOpen} onOpenChange={setTrackDialogOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline">
@@ -445,6 +291,20 @@ export default function BatchesPage() {
             </DialogHeader>
             {selectedBatch && (
               <div className="space-y-4 text-sm">
+                {(() => {
+                  const envAlert = getBatchEnvironmentAlert(Number(selectedBatch.id));
+                  if (!envAlert.hasData) return null;
+                  return (
+                    <div
+                      className={`rounded-md border px-3 py-2 ${
+                        envAlert.breached ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      }`}
+                    >
+                      <p className="font-semibold">{envAlert.summary}</p>
+                      <p className="text-xs">{envAlert.details}</p>
+                    </div>
+                  );
+                })()}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <p className="text-gray-500">Status</p>
@@ -455,8 +315,8 @@ export default function BatchesPage() {
                     <p className="font-medium text-gray-900">{selectedBatch.currentCustodian}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Quantity</p>
-                    <p className="font-medium text-gray-900">{selectedBatch.currentQuantity.toLocaleString()}</p>
+                    <p className="text-gray-500">Weight (kg)</p>
+                    <p className="font-medium text-gray-900">{selectedBatch.currentWeight.toLocaleString()}</p>
                   </div>
                   <div>
                     <p className="text-gray-500">Last Updated</p>
@@ -512,19 +372,6 @@ export default function BatchesPage() {
           </DialogContent>
         </Dialog>
 
-        {feedback?.type === 'success' && (
-          <Card className="mb-6 border-green-200 bg-green-50">
-            <CardContent className="space-y-1 pt-6 text-sm text-green-900">
-              <p className="font-medium">{feedback.message}</p>
-              <p>Batch ID: {feedback.newBatchId ?? 'Pending event parse'}</p>
-              <p>Chain: {feedback.chainId}</p>
-              <p>Contract: {feedback.contractAddress}</p>
-              <p className="break-all">Tx Hash: {feedback.txHash}</p>
-              <p className="break-all">Temp IPFS: {feedback.ipfsHash}</p>
-            </CardContent>
-          </Card>
-        )}
-
         <div className="mb-6">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -539,7 +386,12 @@ export default function BatchesPage() {
 
         <div className="space-y-4">
           {filteredBatches.map((batch) => (
-            <Card key={batch.id} className="hover:shadow-md transition-shadow">
+            <Card
+              key={batch.id}
+              className={`hover:shadow-md transition-shadow ${
+                getBatchEnvironmentAlert(Number(batch.id)).breached ? 'border-red-200 bg-red-50/40' : ''
+              }`}
+            >
               <CardContent className="p-6">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 space-y-4">
@@ -550,12 +402,37 @@ export default function BatchesPage() {
                           <Badge className={getStatusColor(batch.status)}>
                             {batch.status.replace('_', ' ')}
                           </Badge>
+                          {(() => {
+                            const envAlert = getBatchEnvironmentAlert(Number(batch.id));
+                            if (!envAlert.hasData || !envAlert.breached) return null;
+                            return (
+                              <Badge variant="destructive" className="flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" />
+                                Env breach
+                              </Badge>
+                            );
+                          })()}
                         </div>
                         <p className="mt-1 text-sm text-gray-600">{batch.product}</p>
+                        {(() => {
+                          const envAlert = getBatchEnvironmentAlert(Number(batch.id));
+                          if (!envAlert.hasData || !envAlert.breached) return null;
+                          return <p className="mt-1 text-xs text-red-700">{envAlert.details}</p>;
+                        })()}
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>
-                        View Details
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>
+                          View Details
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                          onClick={() => handleStopTrackingBatch(batch.id)}
+                        >
+                          Stop Tracking Batch
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -564,9 +441,9 @@ export default function BatchesPage() {
                           <Package className="h-5 w-5 text-blue-600" />
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Quantity</p>
+                          <p className="text-xs text-gray-500">Weight (kg)</p>
                           <p className="font-medium text-gray-900">
-                            {batch.currentQuantity.toLocaleString()} / {batch.quantity.toLocaleString()}
+                            {batch.currentWeight.toLocaleString()} / {batch.weight.toLocaleString()}
                           </p>
                         </div>
                       </div>

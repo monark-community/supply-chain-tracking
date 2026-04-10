@@ -2,7 +2,9 @@
 
 import { Contract } from 'ethers';
 import { isAddress } from 'ethers';
-import type { JsonRpcProvider, Wallet } from 'ethers';
+import type { Provider, Signer } from 'ethers';
+import { getActiveWalletSession } from './active-wallet-session';
+import { enableManualWalletFallback } from './wallet-client';
 import { restoreManualWalletSession } from './manual-wallet';
 
 type RegistryEntry = {
@@ -18,9 +20,10 @@ type BatchHarvestedArgs = {
 
 export type HarvestProducerBatchInput = {
   origin: string;
-  quantity: number;
+  weight: number;
   trackingCode: string;
   ipfsHash?: string;
+  hardwareId?: string;
 };
 
 export type HarvestProducerBatchResult = {
@@ -30,10 +33,15 @@ export type HarvestProducerBatchResult = {
   newBatchId: number | null;
   account: string;
   ipfsHash: string;
+  hardwareId: string | null;
 };
 
 export type InitiateBatchTransferInput = {
   lookup: string;
+  to: string;
+};
+export type InitiateBatchTransferByIdInput = {
+  batchId: number;
   to: string;
 };
 
@@ -49,6 +57,9 @@ export type InitiateBatchTransferResult = {
 export type ReceiveTransferredBatchInput = {
   lookup: string;
 };
+export type ReceiveTransferredBatchByIdInput = {
+  batchId: number;
+};
 
 export type ReceiveTransferredBatchResult = {
   chainId: number;
@@ -59,8 +70,8 @@ export type ReceiveTransferredBatchResult = {
 };
 
 type ChainproofWriteContext = {
-  provider: JsonRpcProvider;
-  wallet: Wallet;
+  provider: Provider;
+  signer: Signer;
   contract: Contract;
   chainId: number;
   contractAddress: string;
@@ -70,10 +81,13 @@ type ChainproofWriteContext = {
 const CHAINPROOF_WRITE_ABI = [
   'function roles(address) view returns (uint8)',
   'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
-  'function harvestBatch(string origin, string ipfsHash, uint256 quantity, string trackingCode) returns (uint256 newBatchId)',
+  'function harvestBatch(string origin, string ipfsHash, uint256 weight, string trackingCode) returns (uint256 newBatchId)',
+  'function harvestBatchWithHardware(string origin, string ipfsHash, uint256 weight, string trackingCode, string hardwareId) returns (uint256 newBatchId)',
+  'function bindHardwareIdToBatch(uint256 batchId, string hardwareId)',
+  'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function initiateTransfer(uint256 batchId, address to)',
   'function receiveBatch(uint256 batchId)',
-  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
+  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 weight, string trackingCode, uint256 timestamp)',
   'event BatchTransferInitiated(uint256 indexed id, address indexed from, address indexed to, uint256 timestamp)',
   'event BatchReceived(uint256 indexed id, address indexed receiver, uint256 timestamp)',
 ] as const;
@@ -119,8 +133,8 @@ function mapWriteError(
   if (lowered.includes('tracking code already used')) {
     return new Error('Tracking code is already used. Choose a unique code.');
   }
-  if (lowered.includes('quantity must be greater than zero')) {
-    return new Error('Quantity must be greater than zero.');
+  if (lowered.includes('weight must be greater than zero')) {
+    return new Error('Weight must be greater than zero.');
   }
   if (lowered.includes('insufficient funds')) {
     return new Error('Wallet has insufficient funds for gas.');
@@ -175,11 +189,27 @@ async function resolveBatchIdFromLookup(context: ChainproofWriteContext, lookup:
 async function createChainproofWriteContext(
   contractKey: string = defaultContractKey
 ): Promise<ChainproofWriteContext> {
-  const [registry, session] = await Promise.all([fetchRegistry(), restoreManualWalletSession()]);
-  if (!session) {
-    throw new Error('No active manual wallet session. Sign in with a private key first.');
+  const registry = await fetchRegistry();
+  let session = getActiveWalletSession();
+
+  if (!session && enableManualWalletFallback) {
+    const manualSession = await restoreManualWalletSession();
+    if (manualSession) {
+      session = {
+        provider: manualSession.provider,
+        signer: manualSession.wallet,
+        address: manualSession.address,
+        chainId: manualSession.chainId,
+        source: 'manual',
+      };
+    }
   }
-  const { provider, wallet, address: account } = session;
+
+  if (!session) {
+    throw new Error('No active wallet session. Connect a wallet first.');
+  }
+
+  const { provider, signer, address: account } = session;
   const network = await provider.getNetwork();
   const chainId = Number(network.chainId);
 
@@ -197,8 +227,8 @@ async function createChainproofWriteContext(
     throw new Error(`No contract code found at ${contractAddress} on chain ${chainId}.`);
   }
 
-  const contract = new Contract(contractAddress, CHAINPROOF_WRITE_ABI, wallet);
-  return { provider, wallet, contract, chainId, contractAddress, account };
+  const contract = new Contract(contractAddress, CHAINPROOF_WRITE_ABI, signer);
+  return { provider, signer, contract, chainId, contractAddress, account };
 }
 
 function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data: string; topics: string[] }> } | null) {
@@ -220,7 +250,8 @@ function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data:
 export async function harvestProducerBatch(input: HarvestProducerBatchInput): Promise<HarvestProducerBatchResult> {
   const origin = input.origin.trim();
   const trackingCode = input.trackingCode.trim();
-  const quantity = Math.floor(input.quantity);
+  const hardwareId = input.hardwareId?.trim() || '';
+  const weight = Math.floor(input.weight);
   const ipfsHash = input.ipfsHash?.trim() || makeTempIpfsHash(trackingCode);
 
   if (!origin) {
@@ -229,8 +260,8 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
   if (!trackingCode) {
     throw new Error('Tracking code is required.');
   }
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    throw new Error('Quantity must be greater than zero.');
+  if (!Number.isFinite(weight) || weight <= 0) {
+    throw new Error('Weight must be greater than zero.');
   }
 
   try {
@@ -240,7 +271,9 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
       throw new Error('Role not allowed');
     }
 
-    const tx = await context.contract.harvestBatch(origin, ipfsHash, BigInt(quantity), trackingCode);
+    const tx = hardwareId
+      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), trackingCode, hardwareId)
+      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), trackingCode);
     const receipt = await tx.wait();
     const newBatchId = getHarvestedBatchId(context.contract, receipt);
 
@@ -251,6 +284,7 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
       newBatchId,
       account: context.account,
       ipfsHash,
+      hardwareId: hardwareId || null,
     };
   } catch (error) {
     throw mapWriteError(error, { roleNotAllowedMessage: 'Connected wallet is not assigned the Producer role.' });
@@ -260,25 +294,47 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
 export async function initiateBatchTransfer(
   input: InitiateBatchTransferInput
 ): Promise<InitiateBatchTransferResult> {
+  try {
+    const context = await createChainproofWriteContext();
+    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
+    return initiateBatchTransferByIdWithContext(context, { batchId, to: input.to });
+  } catch (error) {
+    throw mapWriteError(error);
+  }
+}
+
+async function initiateBatchTransferByIdWithContext(
+  context: ChainproofWriteContext,
+  input: InitiateBatchTransferByIdInput
+): Promise<InitiateBatchTransferResult> {
   const recipient = input.to.trim();
   if (!isAddress(recipient)) {
     throw new Error('Recipient wallet address is invalid.');
   }
+  const batchId = Math.floor(input.batchId);
+  if (!Number.isFinite(batchId) || batchId <= 0) {
+    throw new Error('Batch id is invalid.');
+  }
 
+  const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
+  await tx.wait();
+
+  return {
+    chainId: context.chainId,
+    contractAddress: context.contractAddress,
+    txHash: String(tx.hash),
+    account: context.account,
+    batchId,
+    to: recipient,
+  };
+}
+
+export async function initiateBatchTransferById(
+  input: InitiateBatchTransferByIdInput
+): Promise<InitiateBatchTransferResult> {
   try {
     const context = await createChainproofWriteContext();
-    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
-    const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
-    await tx.wait();
-
-    return {
-      chainId: context.chainId,
-      contractAddress: context.contractAddress,
-      txHash: String(tx.hash),
-      account: context.account,
-      batchId,
-      to: recipient,
-    };
+    return initiateBatchTransferByIdWithContext(context, input);
   } catch (error) {
     throw mapWriteError(error);
   }
@@ -290,16 +346,38 @@ export async function receiveTransferredBatch(
   try {
     const context = await createChainproofWriteContext();
     const batchId = await resolveBatchIdFromLookup(context, input.lookup);
-    const tx = await context.contract.receiveBatch(BigInt(batchId));
-    await tx.wait();
+    return receiveTransferredBatchByIdWithContext(context, { batchId });
+  } catch (error) {
+    throw mapWriteError(error);
+  }
+}
 
-    return {
-      chainId: context.chainId,
-      contractAddress: context.contractAddress,
-      txHash: String(tx.hash),
-      account: context.account,
-      batchId,
-    };
+async function receiveTransferredBatchByIdWithContext(
+  context: ChainproofWriteContext,
+  input: ReceiveTransferredBatchByIdInput
+): Promise<ReceiveTransferredBatchResult> {
+  const batchId = Math.floor(input.batchId);
+  if (!Number.isFinite(batchId) || batchId <= 0) {
+    throw new Error('Batch id is invalid.');
+  }
+  const tx = await context.contract.receiveBatch(BigInt(batchId));
+  await tx.wait();
+
+  return {
+    chainId: context.chainId,
+    contractAddress: context.contractAddress,
+    txHash: String(tx.hash),
+    account: context.account,
+    batchId,
+  };
+}
+
+export async function receiveTransferredBatchById(
+  input: ReceiveTransferredBatchByIdInput
+): Promise<ReceiveTransferredBatchResult> {
+  try {
+    const context = await createChainproofWriteContext();
+    return receiveTransferredBatchByIdWithContext(context, input);
   } catch (error) {
     throw mapWriteError(error);
   }

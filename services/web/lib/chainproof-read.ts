@@ -15,11 +15,12 @@ const CHAINPROOF_READ_ABI = [
   'function owner() view returns (address)',
   'function batchCount() view returns (uint256)',
   'function roles(address) view returns (uint8)',
-  'function batches(uint256) view returns (uint256 id, address creator, string origin, string ipfsHash, uint256 quantity, string trackingCode, uint8 status, uint256 createdAt, uint256 updatedAt, address currentHandler)',
+  'function batches(uint256) view returns (uint256 id, address creator, string origin, string ipfsHash, uint256 weight, string trackingCode, uint8 status, uint256 createdAt, uint256 updatedAt, address currentHandler)',
   'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
+  'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function getParentBatches(uint256 batchId) view returns (uint256[])',
   'function getChildBatches(uint256 batchId) view returns (uint256[])',
-  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 quantity, string trackingCode, uint256 timestamp)',
+  'event BatchHarvested(uint256 indexed id, address indexed creator, uint256 weight, string trackingCode, uint256 timestamp)',
   'event BatchSplit(uint256 indexed parentId, uint256[] childIds, address indexed handler, uint256 timestamp)',
   'event BatchMerged(uint256[] inputBatchIds, uint256 indexed outputBatchId, address indexed handler, uint256 timestamp)',
   'event BatchTransformed(uint256[] inputBatchIds, uint256 indexed outputBatchId, string processType, address indexed handler, uint256 timestamp)',
@@ -41,6 +42,23 @@ export type ChainproofReadContext = {
   contract: Contract;
   chainId: number;
   contractAddress: string;
+};
+
+export type ProducerRecentActivity = {
+  type: 'CREATED' | 'TRANSFER_INITIATED';
+  batchId: number;
+  timestamp: number;
+  txHash: string;
+  description: string;
+};
+
+export type TransporterCustodyShipment = {
+  batchId: number;
+  trackingCode: string;
+  origin: string;
+  weight: number;
+  status: 'ACTIVE' | 'CONSUMED';
+  updatedAt: number;
 };
 
 const defaultRpcUrl = process.env.NEXT_PUBLIC_CHAINPROOF_RPC_URL || 'http://127.0.0.1:8545';
@@ -124,6 +142,12 @@ export async function readChainproofSummary(viewerAddress?: string) {
   };
 }
 
+export async function readPredictedNextBatchId(): Promise<number> {
+  const context = await createChainproofReadContext();
+  const batchCount = Number(await context.contract.batchCount());
+  return batchCount + 1;
+}
+
 export async function readBatchByTrackingOrId(lookup: string) {
   const context = await createChainproofReadContext();
   const trimmed = lookup.trim();
@@ -152,7 +176,7 @@ export async function readBatchByTrackingOrId(lookup: string) {
     creator: String(batchRaw.creator),
     origin: String(batchRaw.origin),
     ipfsHash: String(batchRaw.ipfsHash),
-    quantity: Number(batchRaw.quantity),
+    weight: Number(batchRaw.weight),
     trackingCode: String(batchRaw.trackingCode),
     status: Number(batchRaw.status),
     createdAt: Number(batchRaw.createdAt),
@@ -245,4 +269,110 @@ export async function readBatchByTrackingOrId(lookup: string) {
     children,
     timeline,
   };
+}
+
+export async function readBatchByHardwareId(hardwareId: string) {
+  const trimmed = hardwareId.trim();
+  if (!trimmed) {
+    throw new Error('Hardware id is required.');
+  }
+  const batchId = await readBatchIdByHardwareId(trimmed);
+  if (!batchId) {
+    throw new Error('No batch is bound to this hardware id.');
+  }
+  return readBatchByTrackingOrId(String(batchId));
+}
+
+export async function readBatchIdByHardwareId(hardwareId: string): Promise<number> {
+  const context = await createChainproofReadContext();
+  const trimmed = hardwareId.trim();
+  if (!trimmed) {
+    throw new Error('Hardware id is required.');
+  }
+  return Number(await context.contract.getBatchIdByHardwareId(trimmed));
+}
+
+export async function readProducerRecentActivity(
+  producerAddress: string,
+  limit: number = 10
+): Promise<ProducerRecentActivity[]> {
+  const context = await createChainproofReadContext();
+  const address = producerAddress.trim();
+  if (!address) return [];
+
+  const [createdEventsRaw, transferEventsRaw] = await Promise.all([
+    context.contract.queryFilter(context.contract.filters.BatchHarvested(null, address)),
+    context.contract.queryFilter(context.contract.filters.BatchTransferInitiated(null, address)),
+  ]);
+
+  const createdEvents = createdEventsRaw.map((rawEvent) => {
+    const event = rawEvent as unknown as EventLike;
+    return {
+      type: 'CREATED' as const,
+      batchId: toNumber(event.args?.id),
+      timestamp: toNumber(event.args?.timestamp),
+      txHash: event.transactionHash,
+      description: `Batch ${toNumber(event.args?.id)} created`,
+    };
+  });
+
+  const transferEvents = transferEventsRaw.map((rawEvent) => {
+    const event = rawEvent as unknown as EventLike;
+    const batchId = toNumber(event.args?.id);
+    const to = toString(event.args?.to);
+    return {
+      type: 'TRANSFER_INITIATED' as const,
+      batchId,
+      timestamp: toNumber(event.args?.timestamp),
+      txHash: event.transactionHash,
+      description: `Transfer initiated for batch ${batchId}${to ? ` to ${to}` : ''}`,
+    };
+  });
+
+  return [...createdEvents, ...transferEvents]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, Math.max(0, limit));
+}
+
+export async function readTransporterCustodyShipments(
+  transporterAddress: string,
+  limit: number = 20
+): Promise<TransporterCustodyShipment[]> {
+  const context = await createChainproofReadContext();
+  const address = transporterAddress.trim().toLowerCase();
+  if (!address) return [];
+
+  const batchCount = Number(await context.contract.batchCount());
+  if (!Number.isFinite(batchCount) || batchCount <= 0) return [];
+
+  const batchIds = Array.from({ length: batchCount }, (_, index) => index + 1);
+  const allBatchesRaw = await Promise.all(batchIds.map((batchId) => context.contract.batches(batchId)));
+
+  return allBatchesRaw
+    .map((batchRaw) => ({
+      batchId: Number(batchRaw.id),
+      trackingCode: String(batchRaw.trackingCode),
+      origin: String(batchRaw.origin),
+      weight: Number(batchRaw.weight),
+      status: Number(batchRaw.status) === 0 ? ('ACTIVE' as const) : ('CONSUMED' as const),
+      updatedAt: Number(batchRaw.updatedAt),
+      currentHandler: String(batchRaw.currentHandler).toLowerCase(),
+    }))
+    .filter((item) => item.batchId > 0 && item.currentHandler === address)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, Math.max(0, limit))
+    .map((item) => {
+      const { currentHandler, ...shipment } = item;
+      void currentHandler;
+      return shipment;
+    });
+}
+
+export type WarehouseStorageBatch = TransporterCustodyShipment;
+
+export async function readWarehouseStorageQueue(
+  warehouseAddress: string,
+  limit: number = 20
+): Promise<WarehouseStorageBatch[]> {
+  return readTransporterCustodyShipments(warehouseAddress, limit);
 }

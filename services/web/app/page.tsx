@@ -8,7 +8,7 @@ import { ProcessorDashboard } from '@/components/dashboards/processor-dashboard'
 import { CustomerDashboard } from '@/components/dashboards/customer-dashboard';
 import { WarehouseDashboard } from '@/components/dashboards/warehouse-dashboard';
 import { Button } from '@/components/ui/button';
-import { useWalletAuth } from '@/components/auth/wallet-auth-provider';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { shortenAddress } from '@/lib/wallet-auth';
 
 export default function Home() {
@@ -46,16 +46,14 @@ export default function Home() {
         ) : (
           <div className="mx-auto max-w-xl rounded-xl border border-blue-200 bg-blue-50 p-6">
             <h2 className="text-lg font-semibold text-blue-900">Role not assigned</h2>
-            <p className="mt-2 text-sm text-blue-800">
-              This wallet does not have an on-chain role yet. Assign one in signup/login, then come back.
-            </p>
+            <p className="mt-2 text-sm text-blue-800">This wallet does not have an on-chain role yet.</p>
             <div className="mt-4 rounded-md border border-blue-200 bg-white p-3 text-sm text-blue-900">
               <p><span className="font-medium">Status:</span> {status}</p>
               <p><span className="font-medium">Connected account:</span> {account ? shortenAddress(account) : 'Not connected'}</p>
             </div>
             <div className="mt-4 flex gap-3">
-              <Link href="/auth/signup">
-                <Button>Sign In & Assign Role</Button>
+              <Link href={account ? '/auth/assign-role' : '/auth/login'}>
+                <Button>{account ? 'Assign Role' : 'Sign In'}</Button>
               </Link>
             </div>
           </div>

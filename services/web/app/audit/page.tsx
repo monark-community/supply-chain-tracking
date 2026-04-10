@@ -135,7 +135,6 @@ export default function AuditPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Activities</SelectItem>
-                  <SelectItem value="product">Products</SelectItem>
                   <SelectItem value="batch">Batches</SelectItem>
                   <SelectItem value="trace">Traces</SelectItem>
                 </SelectContent>

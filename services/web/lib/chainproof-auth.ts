@@ -1,7 +1,7 @@
 'use client';
 
 import { Contract } from 'ethers';
-import type { JsonRpcProvider, Signer } from 'ethers';
+import type { Provider, Signer } from 'ethers';
 import type { AppRole } from './wallet-auth';
 import { configuredChainId } from './wallet-auth';
 
@@ -53,7 +53,7 @@ const CHAINPROOF_AUTH_ABI = [
 ] as const;
 
 export type ChainproofAuthClient = {
-  provider: JsonRpcProvider;
+  provider: Provider;
   account: string;
   signer?: Signer;
 };

@@ -2,12 +2,14 @@
 
 import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Factory, Package, Activity, TrendingUp, ArrowRightLeft, CheckCircle } from 'lucide-react';
+import { AlertTriangle, Package, ArrowRightLeft, CheckCircle, Bluetooth } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { initiateBatchTransfer, receiveTransferredBatch } from '@/lib/chainproof-write';
+import { initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
+import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
+import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type TxFeedback = {
   type: 'success' | 'error';
@@ -16,20 +18,15 @@ type TxFeedback = {
 };
 
 export function ProcessorDashboard() {
-  const [transferLookup, setTransferLookup] = useState('');
   const [transferRecipient, setTransferRecipient] = useState('');
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
-  const [receiveLookup, setReceiveLookup] = useState('');
   const [receiveSubmitting, setReceiveSubmitting] = useState(false);
   const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
-
-  const stats = [
-    { name: 'Batches in Processing', value: '9', icon: Factory, change: '4 waiting' },
-    { name: 'Received Today', value: '6', icon: Package, change: 'On schedule' },
-    { name: 'Processed This Month', value: '142', icon: Activity, change: '+12% vs last' },
-    { name: 'Quality Pass Rate', value: '98.5%', icon: TrendingUp, change: 'Excellent' },
-  ];
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [loadingHardwareBatch, setLoadingHardwareBatch] = useState(false);
+  const { isNfcConnected, isConnecting, nfcDeviceName, connectionError, connectNfcDevice, readActiveBatchIdFromHardware } =
+    useNfcBleBridge();
 
   const processingQueue = [
     { batch: 'BATCH-A1B2', product: 'Organic Coffee Beans', qty: '500 kg', status: 'Received', time: '2 hours ago' },
@@ -43,14 +40,26 @@ export function ProcessorDashboard() {
     'Quality Check': 'bg-purple-100 text-purple-800',
     'Ready to Ship': 'bg-green-100 text-green-800',
   };
+  const activeBatchEnvAlert = getBatchEnvironmentAlert(activeBatchId);
 
   const handleTransfer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setTransferSubmitting(true);
     setTransferFeedback(null);
     try {
-      const result = await initiateBatchTransfer({
-        lookup: transferLookup,
+      let batchId = activeBatchId;
+      if (!batchId) {
+        setLoadingHardwareBatch(true);
+        try {
+          batchId = await readActiveBatchIdFromHardware();
+        } finally {
+          setLoadingHardwareBatch(false);
+        }
+      }
+      if (!batchId) throw new Error('No active batch id was found on connected hardware.');
+      setActiveBatchId(batchId);
+      const result = await initiateBatchTransferById({
+        batchId,
         to: transferRecipient,
       });
       setTransferFeedback({
@@ -58,7 +67,6 @@ export function ProcessorDashboard() {
         message: `Transfer initiated for batch ${result.batchId}.`,
         txHash: result.txHash,
       });
-      setTransferLookup('');
       setTransferRecipient('');
     } catch (error) {
       setTransferFeedback({
@@ -75,15 +83,23 @@ export function ProcessorDashboard() {
     setReceiveSubmitting(true);
     setReceiveFeedback(null);
     try {
-      const result = await receiveTransferredBatch({
-        lookup: receiveLookup,
-      });
+      let batchId = activeBatchId;
+      if (!batchId) {
+        setLoadingHardwareBatch(true);
+        try {
+          batchId = await readActiveBatchIdFromHardware();
+        } finally {
+          setLoadingHardwareBatch(false);
+        }
+      }
+      if (!batchId) throw new Error('No active batch id was found on connected hardware.');
+      setActiveBatchId(batchId);
+      const result = await receiveTransferredBatchById({ batchId });
       setReceiveFeedback({
         type: 'success',
         message: `Batch ${result.batchId} received successfully.`,
         txHash: result.txHash,
       });
-      setReceiveLookup('');
     } catch (error) {
       setReceiveFeedback({
         type: 'error',
@@ -105,24 +121,6 @@ export function ProcessorDashboard() {
 
       <ReadOnlyChainCard />
 
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Card key={stat.name}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-gray-600">{stat.name}</CardTitle>
-                <Icon className="h-4 w-4 text-gray-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-gray-900">{stat.value}</div>
-                <p className="mt-1 text-xs text-gray-600">{stat.change}</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
       <Card className="border-2 border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center text-blue-900">
@@ -134,18 +132,34 @@ export function ProcessorDashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-md border bg-white p-3 text-xs text-slate-700 lg:col-span-2">
+            <p className="font-semibold text-slate-900">Hardware required for custody actions</p>
+            <p className="mt-1">{isNfcConnected ? `Connected: ${nfcDeviceName || 'ESP32 device'}` : 'Not connected'}</p>
+            <p className="mt-1">Active batch ID: {activeBatchId ?? 'Not loaded'}</p>
+            {activeBatchEnvAlert.hasData && activeBatchEnvAlert.breached ? (
+              <p className="mt-1 inline-flex items-center gap-1 text-red-700">
+                <AlertTriangle className="h-3 w-3" />
+                {activeBatchEnvAlert.summary}
+              </p>
+            ) : null}
+            {connectionError ? <p className="mt-1 text-red-600">{connectionError}</p> : null}
+            <div className="mt-2 flex gap-2">
+              <Button type="button" variant="outline" onClick={() => void connectNfcDevice()} disabled={isNfcConnected || isConnecting}>
+                <Bluetooth className="mr-2 h-4 w-4" />
+                {isConnecting ? 'Connecting...' : isNfcConnected ? 'Connected' : 'Connect'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void readActiveBatchIdFromHardware().then((id) => setActiveBatchId(id))}
+                disabled={!isNfcConnected || loadingHardwareBatch || transferSubmitting || receiveSubmitting}
+              >
+                {loadingHardwareBatch ? 'Reading...' : 'Load Batch From Hardware'}
+              </Button>
+            </div>
+          </div>
           <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
             <h4 className="font-semibold text-gray-900">Initiate Transfer</h4>
-            <div className="space-y-2">
-              <Label htmlFor="processor-transfer-lookup">Batch ID or tracking code</Label>
-              <Input
-                id="processor-transfer-lookup"
-                value={transferLookup}
-                onChange={(event) => setTransferLookup(event.target.value)}
-                placeholder="e.g., 12 or BATCH-2026-001"
-                disabled={transferSubmitting}
-              />
-            </div>
             <div className="space-y-2">
               <Label htmlFor="processor-transfer-recipient">Recipient wallet</Label>
               <Input
@@ -162,7 +176,7 @@ export function ProcessorDashboard() {
                 {transferFeedback.txHash ? ` tx: ${transferFeedback.txHash}` : ''}
               </p>
             )}
-            <Button className="w-full" disabled={transferSubmitting || !transferLookup.trim() || !transferRecipient.trim()}>
+            <Button className="w-full" disabled={transferSubmitting || !isNfcConnected || !activeBatchId || !transferRecipient.trim()}>
               <ArrowRightLeft className="mr-2 h-4 w-4" />
               {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
             </Button>
@@ -170,23 +184,13 @@ export function ProcessorDashboard() {
 
           <form onSubmit={handleReceive} className="space-y-3 rounded-lg border bg-white p-4">
             <h4 className="font-semibold text-gray-900">Receive Batch</h4>
-            <div className="space-y-2">
-              <Label htmlFor="processor-receive-lookup">Batch ID or tracking code</Label>
-              <Input
-                id="processor-receive-lookup"
-                value={receiveLookup}
-                onChange={(event) => setReceiveLookup(event.target.value)}
-                placeholder="e.g., 12 or BATCH-2026-001"
-                disabled={receiveSubmitting}
-              />
-            </div>
             {receiveFeedback && (
               <p className={`text-sm ${receiveFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
                 {receiveFeedback.message}
                 {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
               </p>
             )}
-            <Button className="w-full" disabled={receiveSubmitting || !receiveLookup.trim()}>
+            <Button className="w-full" disabled={receiveSubmitting || !isNfcConnected || !activeBatchId}>
               <Package className="mr-2 h-4 w-4" />
               {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
             </Button>
@@ -283,39 +287,6 @@ export function ProcessorDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Processor Permissions</CardTitle>
-          <CardDescription>What you can and cannot do</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 className="font-semibold text-green-700 mb-2 flex items-center">
-                <span className="mr-2">✅</span> You Can
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Look up batches by ID or tracking code</li>
-                <li>• Receive shipments (take custody)</li>
-                <li>• Transfer shipments (pass custody)</li>
-                <li>• Split and merge batches</li>
-                <li>• Transform batches (processor only)</li>
-                <li>• View shipment history</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-red-700 mb-2 flex items-center">
-                <span className="mr-2">❌</span> You Cannot
-              </h4>
-              <ul className="space-y-1.5 text-sm text-gray-700">
-                <li>• Create products</li>
-                <li>• Harvest root batches</li>
-                <li>• Assign participant roles</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

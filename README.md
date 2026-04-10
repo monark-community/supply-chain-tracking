@@ -87,7 +87,14 @@ cd ../web && npm install
 cd ../..
 ```
 
-## 4) Start local Hardhat node (Terminal A)
+## 4) Choose your chain target
+
+You can deploy either to:
+
+- local Hardhat node (fast local dev)
+- Tenderly Virtual TestNet (shared persistent testnet)
+
+### 4A) Local Hardhat node (Terminal A)
 
 ```bash
 cd services/smart-contracts
@@ -103,13 +110,43 @@ The node starts at:
 
 It will print funded accounts and private keys. Those are test-only keys for local use.
 
-## 5) Deploy contract to local node (Terminal B)
+### 4B) Tenderly Virtual TestNet
 
-Open a second terminal:
+Set these in root `.env`:
+
+```env
+TENDERLY_VIRTUAL_TESTNET_RPC_URL=https://virtual.mainnet.rpc.tenderly.co/<project>/<testnet>
+TENDERLY_VIRTUAL_TESTNET_CHAIN_ID=<your_virtual_chain_id>
+TENDERLY_DEPLOYER_PRIVATE_KEY=0x<test_private_key>
+
+CHAINPROOF_RPC_URL=https://virtual.mainnet.rpc.tenderly.co/<project>/<testnet>
+CHAINPROOF_CHAIN_ID=<your_virtual_chain_id>
+CHAINPROOF_SIGNER_PRIVATE_KEY=0x<test_private_key>
+```
+
+Then deploy:
 
 ```bash
 cd services/smart-contracts
-npx hardhat run scripts/deploy.js --network localhost
+npm run deploy:tenderly
+```
+
+## 5) Deploy contract (Terminal B)
+
+Open a second terminal:
+
+Local:
+
+```bash
+cd services/smart-contracts
+npm run deploy:local
+```
+
+Tenderly Virtual TestNet:
+
+```bash
+cd services/smart-contracts
+npm run deploy:tenderly
 ```
 
 Expected result:
@@ -117,7 +154,7 @@ Expected result:
 - Shows deployed `ChainProof` address
 - Updates `services/smart-contracts/config/contracts.json` under:
   - key `chainproof`
-  - chain id `1337`
+  - deployed chain id (for local usually `1337`; for Tenderly use your virtual chain id)
 
 ## 6) Start web app (Terminal C)
 

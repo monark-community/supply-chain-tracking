@@ -6,7 +6,7 @@
       "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
       "version": "2.0.0",
       "deployedAtBlock": 1,
-      "updatedAt": "2026-02-20T00:22:41.178Z"
+      "updatedAt": "2026-03-30T02:28:56.030Z"
     },
     "73571": {
       "networkName": "tenderly",
@@ -31,6 +31,14 @@
       "version": "2.0.0",
       "deployedAtBlock": 10291274,
       "updatedAt": "2026-02-19T07:43:25.640Z"
+    },
+    "99911155111": {
+      "networkName": "tenderly",
+      "chainId": 99911155111,
+      "address": "0xd5991C5a25053C7dA976417872a88748c35589b6",
+      "version": "2.0.0",
+      "deployedAtBlock": 10505776,
+      "updatedAt": "2026-03-23T16:36:38.140Z"
     }
   }
 }

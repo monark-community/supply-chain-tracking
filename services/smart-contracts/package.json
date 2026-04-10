@@ -1,6 +1,10 @@
 {
   "name": "chainproof-contracts",
   "version": "1.0.0",
+  "scripts": {
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:tenderly": "hardhat run scripts/deploy.js --network tenderly"
+  },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
     "dotenv": "^17.3.1",
