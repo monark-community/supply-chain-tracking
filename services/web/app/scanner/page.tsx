@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ArrowRightLeft, Package, Search } from 'lucide-react';
 import { harvestProducerBatch, initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
-import { readBatchByTrackingOrId, readBatchIdByHardwareId } from '@/lib/chainproof-read';
+import { readBatchById, readBatchIdByHardwareId } from '@/lib/chainproof-read';
 import { consumePendingNfcScan } from '@/lib/nfc-scan-session';
 import type { AppRole } from '@/lib/wallet-auth';
 import type { ResolvedNfcScanContext } from '@/lib/nfc-scan-payload';
@@ -28,7 +28,6 @@ export default function ScannerPage() {
   const [scanSnapshot, setScanSnapshot] = useState<PendingScanSnapshot | null>(null);
 
   const [origin, setOrigin] = useState('');
-  const [trackingCode, setTrackingCode] = useState('');
   const [weightInput, setWeightInput] = useState('');
   const [hardwareIdInput, setHardwareIdInput] = useState('');
   const [harvestSubmitting, setHarvestSubmitting] = useState(false);
@@ -75,7 +74,6 @@ export default function ScannerPage() {
       const result = await harvestProducerBatch({
         origin,
         weight,
-        trackingCode,
         hardwareId,
       });
       setHarvestFeedback({
@@ -99,7 +97,6 @@ export default function ScannerPage() {
         setVerifyLookup(String(resolvedBatchId));
       }
       setOrigin('');
-      setTrackingCode('');
       setWeightInput('');
     } catch (errorObj) {
       setHarvestFeedback({
@@ -161,12 +158,16 @@ export default function ScannerPage() {
     setVerifySubmitting(true);
     setVerifyFeedback(null);
     try {
-      const lookup = verifyLookup.trim() || (activeBatchId ? String(activeBatchId) : '');
-      if (!lookup) throw new Error('No mapped batch is available yet. A producer must harvest/bind this hardware first.');
-      const result = await readBatchByTrackingOrId(lookup);
+      const trimmed = verifyLookup.trim() || (activeBatchId ? String(activeBatchId) : '');
+      if (!trimmed) throw new Error('No mapped batch is available yet. A producer must harvest/bind this hardware first.');
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+        throw new Error('Enter a valid batch id.');
+      }
+      const result = await readBatchById(parsed);
       setVerifyFeedback({
         type: 'success',
-        message: `Verified batch ${result.batch.id} (${result.batch.trackingCode || 'no tracking code'}) on chain ${result.chainId}.`,
+        message: `Verified batch ${result.batch.id} on chain ${result.chainId}.`,
       });
     } catch (err) {
       setVerifyFeedback({
@@ -257,16 +258,6 @@ export default function ScannerPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="producer-tracking-code">Tracking Code</Label>
-              <Input
-                id="producer-tracking-code"
-                value={trackingCode}
-                onChange={(event) => setTrackingCode(event.target.value)}
-                placeholder="e.g., BATCH-2026-001"
-                disabled={harvestSubmitting}
-              />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="producer-weight">Weight (kg)</Label>
               <Input
                 id="producer-weight"
@@ -344,12 +335,14 @@ export default function ScannerPage() {
         <form onSubmit={handleVerify} className="space-y-3 rounded-lg border bg-white p-4">
           <h4 className="font-semibold text-gray-900">Verify Batch</h4>
           <div className="space-y-2">
-            <Label htmlFor="customer-verify-lookup">Batch ID or tracking code</Label>
+            <Label htmlFor="customer-verify-lookup">Batch ID</Label>
             <Input
               id="customer-verify-lookup"
+              type="number"
+              min={1}
               value={verifyLookup}
               onChange={(event) => setVerifyLookup(event.target.value)}
-              placeholder="e.g., 12 or BATCH-2026-001"
+              placeholder="e.g., 12"
               disabled={verifySubmitting}
             />
           </div>

@@ -100,7 +100,7 @@ export function WarehouseDashboard() {
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-gray-900">Batch {item.batchId}</p>
                     <p className="text-xs text-gray-600">
-                      Tracking: {item.trackingCode || 'N/A'} | Origin: {item.origin || 'N/A'} | Weight: {item.weight} kg
+                      Origin: {item.origin || 'N/A'} | Weight: {item.weight} kg
                     </p>
                     {(() => {
                       const envAlert = getBatchEnvironmentAlert(item.batchId);

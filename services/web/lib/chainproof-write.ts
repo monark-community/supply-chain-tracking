@@ -19,7 +19,6 @@ type BatchHarvestedArgs = {
 export type HarvestProducerBatchInput = {
   origin: string;
   weight: number;
-  trackingCode: string;
   ipfsHash?: string;
   hardwareId?: string;
 };
@@ -34,10 +33,6 @@ export type HarvestProducerBatchResult = {
   hardwareId: string | null;
 };
 
-export type InitiateBatchTransferInput = {
-  lookup: string;
-  to: string;
-};
 export type InitiateBatchTransferByIdInput = {
   batchId: number;
   to: string;
@@ -52,9 +47,6 @@ export type InitiateBatchTransferResult = {
   to: string;
 };
 
-export type ReceiveTransferredBatchInput = {
-  lookup: string;
-};
 export type ReceiveTransferredBatchByIdInput = {
   batchId: number;
 };
@@ -78,7 +70,6 @@ type ChainproofWriteContext = {
 
 const CHAINPROOF_WRITE_ABI = [
   'function roles(address) view returns (uint8)',
-  'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
   'function harvestBatch(string origin, string ipfsHash, uint256 weight, string trackingCode) returns (uint256 newBatchId)',
   'function harvestBatchWithHardware(string origin, string ipfsHash, uint256 weight, string trackingCode, string hardwareId) returns (uint256 newBatchId)',
   'function bindHardwareIdToBatch(uint256 batchId, string hardwareId)',
@@ -108,8 +99,8 @@ function resolveAddressFromRegistry(registry: RegistryShape, contractKey: string
   return entry?.address || '';
 }
 
-function makeTempIpfsHash(trackingCode: string) {
-  const normalized = trackingCode.trim().replace(/\s+/g, '-').slice(0, 64) || 'batch';
+function makeTempIpfsHash(seed: string) {
+  const normalized = seed.trim().replace(/\s+/g, '-').slice(0, 64) || 'batch';
   return `temp://harvest/${normalized}/${Date.now()}`;
 }
 
@@ -164,26 +155,6 @@ function mapWriteError(
   return new Error(message);
 }
 
-async function resolveBatchIdFromLookup(context: ChainproofWriteContext, lookup: string): Promise<number> {
-  const trimmed = lookup.trim();
-  if (!trimmed) {
-    throw new Error('Enter a batch id or tracking code.');
-  }
-
-  if (/^\d+$/.test(trimmed)) {
-    const batchId = Number(trimmed);
-    if (Number.isFinite(batchId) && batchId > 0) {
-      return batchId;
-    }
-  }
-
-  const batchId = Number(await context.contract.getBatchIdByTrackingCode(trimmed));
-  if (!batchId) {
-    throw new Error('Batch not found.');
-  }
-  return batchId;
-}
-
 async function createChainproofWriteContext(
   contractKey: string = defaultContractKey
 ): Promise<ChainproofWriteContext> {
@@ -234,16 +205,12 @@ function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data:
 
 export async function harvestProducerBatch(input: HarvestProducerBatchInput): Promise<HarvestProducerBatchResult> {
   const origin = input.origin.trim();
-  const trackingCode = input.trackingCode.trim();
   const hardwareId = input.hardwareId?.trim() || '';
   const weight = Math.floor(input.weight);
-  const ipfsHash = input.ipfsHash?.trim() || makeTempIpfsHash(trackingCode);
+  const ipfsHash = input.ipfsHash?.trim() || makeTempIpfsHash(hardwareId || origin);
 
   if (!origin) {
     throw new Error('Origin is required.');
-  }
-  if (!trackingCode) {
-    throw new Error('Tracking code is required.');
   }
   if (!Number.isFinite(weight) || weight <= 0) {
     throw new Error('Weight must be greater than zero.');
@@ -256,9 +223,11 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
       throw new Error('Role not allowed');
     }
 
+    // The deployed contract still requires a trackingCode argument; we pass an empty string,
+    // which short-circuits in `_registerTrackingCode` so no tracking-code mapping is created.
     const tx = hardwareId
-      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), trackingCode, hardwareId)
-      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), trackingCode);
+      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), '', hardwareId)
+      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), '');
     const receipt = await tx.wait();
     const newBatchId = getHarvestedBatchId(context.contract, receipt);
 
@@ -273,18 +242,6 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
     };
   } catch (error) {
     throw mapWriteError(error, { roleNotAllowedMessage: 'Connected wallet is not assigned the Producer role.' });
-  }
-}
-
-export async function initiateBatchTransfer(
-  input: InitiateBatchTransferInput
-): Promise<InitiateBatchTransferResult> {
-  try {
-    const context = await createChainproofWriteContext();
-    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
-    return initiateBatchTransferByIdWithContext(context, { batchId, to: input.to });
-  } catch (error) {
-    throw mapWriteError(error);
   }
 }
 
@@ -320,18 +277,6 @@ export async function initiateBatchTransferById(
   try {
     const context = await createChainproofWriteContext();
     return initiateBatchTransferByIdWithContext(context, input);
-  } catch (error) {
-    throw mapWriteError(error);
-  }
-}
-
-export async function receiveTransferredBatch(
-  input: ReceiveTransferredBatchInput
-): Promise<ReceiveTransferredBatchResult> {
-  try {
-    const context = await createChainproofWriteContext();
-    const batchId = await resolveBatchIdFromLookup(context, input.lookup);
-    return receiveTransferredBatchByIdWithContext(context, { batchId });
   } catch (error) {
     throw mapWriteError(error);
   }

@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Search, Clock, Package, AlertTriangle } from 'lucide-react';
-import { readBatchByTrackingOrId } from '@/lib/chainproof-read';
+import { readBatchById } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
@@ -49,7 +49,6 @@ type BatchDetails = {
   origin: string;
   ipfsHash: string;
   weight: number;
-  trackingCode: string;
   status: number;
   createdAt: number;
   updatedAt: number;
@@ -154,10 +153,15 @@ export default function BatchesPage() {
     setTrackFeedback(null);
 
     try {
-      const result = await readBatchByTrackingOrId(trackLookup);
+      const trimmed = trackLookup.trim();
+      const parsed = Number(trimmed);
+      if (!trimmed || !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error('Enter a valid batch id.');
+      }
+      const result = await readBatchById(parsed);
       const item: BatchItem = {
         id: String(result.batch.id),
-        batchNumber: result.batch.trackingCode || String(result.batch.id),
+        batchNumber: `Batch #${result.batch.id}`,
         product: result.batch.origin || 'Unknown Product',
         weight: result.batch.weight,
         currentWeight: result.batch.weight,
@@ -173,7 +177,6 @@ export default function BatchesPage() {
           origin: result.batch.origin,
           ipfsHash: result.batch.ipfsHash,
           weight: result.batch.weight,
-          trackingCode: result.batch.trackingCode,
           status: result.batch.status,
           createdAt: result.batch.createdAt,
           updatedAt: result.batch.updatedAt,
@@ -257,15 +260,17 @@ export default function BatchesPage() {
                 <form onSubmit={handleTrackBatch}>
                   <DialogHeader>
                     <DialogTitle>Track a Batch</DialogTitle>
-                    <DialogDescription>Enter a numeric batch ID or tracking code to add it to your tracked list.</DialogDescription>
+                    <DialogDescription>Enter a batch ID to add it to your tracked list.</DialogDescription>
                   </DialogHeader>
                   <div className="py-4">
-                    <Label htmlFor="track-lookup">Batch ID or tracking code</Label>
+                    <Label htmlFor="track-lookup">Batch ID</Label>
                     <Input
                       id="track-lookup"
+                      type="number"
+                      min={1}
                       value={trackLookup}
                       onChange={(event) => setTrackLookup(event.target.value)}
-                      placeholder="e.g., 12 or BATCH-2026-001"
+                      placeholder="e.g., 12"
                       disabled={trackingSubmitting}
                     />
                   </div>
@@ -376,7 +381,7 @@ export default function BatchesPage() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <Input
-              placeholder="Search batches by number or product..."
+              placeholder="Search batches by ID or product..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10"
@@ -493,7 +498,7 @@ export default function BatchesPage() {
           <div className="flex flex-col items-center justify-center py-12">
             <MapPin className="h-12 w-12 text-gray-400" />
             <h3 className="mt-4 text-lg font-medium text-gray-900">No batches found</h3>
-            <p className="mt-2 text-sm text-gray-600">Try tracking a batch by ID or tracking code.</p>
+            <p className="mt-2 text-sm text-gray-600">Try tracking a batch by ID.</p>
           </div>
         )}
       </main>

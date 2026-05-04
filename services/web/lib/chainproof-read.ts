@@ -16,7 +16,6 @@ const CHAINPROOF_READ_ABI = [
   'function batchCount() view returns (uint256)',
   'function roles(address) view returns (uint8)',
   'function batches(uint256) view returns (uint256 id, address creator, string origin, string ipfsHash, uint256 weight, string trackingCode, uint8 status, uint256 createdAt, uint256 updatedAt, address currentHandler)',
-  'function getBatchIdByTrackingCode(string trackingCode) view returns (uint256)',
   'function getBatchIdByHardwareId(string hardwareId) view returns (uint256)',
   'function getParentBatches(uint256 batchId) view returns (uint256[])',
   'function getChildBatches(uint256 batchId) view returns (uint256[])',
@@ -54,7 +53,6 @@ export type ProducerRecentActivity = {
 
 export type TransporterCustodyShipment = {
   batchId: number;
-  trackingCode: string;
   origin: string;
   weight: number;
   status: 'ACTIVE' | 'CONSUMED';
@@ -148,21 +146,10 @@ export async function readPredictedNextBatchId(): Promise<number> {
   return batchCount + 1;
 }
 
-export async function readBatchByTrackingOrId(lookup: string) {
+export async function readBatchById(batchId: number) {
   const context = await createChainproofReadContext();
-  const trimmed = lookup.trim();
-  if (!trimmed) {
-    throw new Error('Enter a batch id or tracking code.');
-  }
-
-  const parsedId = Number(trimmed);
-  const batchId =
-    Number.isFinite(parsedId) && parsedId > 0
-      ? parsedId
-      : Number(await context.contract.getBatchIdByTrackingCode(trimmed));
-
-  if (!batchId) {
-    throw new Error('Batch not found.');
+  if (!Number.isFinite(batchId) || batchId <= 0) {
+    throw new Error('Enter a valid batch id.');
   }
 
   const [batchRaw, parentsRaw, childrenRaw] = await Promise.all([
@@ -171,13 +158,16 @@ export async function readBatchByTrackingOrId(lookup: string) {
     context.contract.getChildBatches(batchId),
   ]);
 
+  if (Number(batchRaw.id) === 0) {
+    throw new Error('Batch not found.');
+  }
+
   const batch = {
     id: Number(batchRaw.id),
     creator: String(batchRaw.creator),
     origin: String(batchRaw.origin),
     ipfsHash: String(batchRaw.ipfsHash),
     weight: Number(batchRaw.weight),
-    trackingCode: String(batchRaw.trackingCode),
     status: Number(batchRaw.status),
     createdAt: Number(batchRaw.createdAt),
     updatedAt: Number(batchRaw.updatedAt),
@@ -280,7 +270,7 @@ export async function readBatchByHardwareId(hardwareId: string) {
   if (!batchId) {
     throw new Error('No batch is bound to this hardware id.');
   }
-  return readBatchByTrackingOrId(String(batchId));
+  return readBatchById(batchId);
 }
 
 export async function readBatchIdByHardwareId(hardwareId: string): Promise<number> {
@@ -351,7 +341,6 @@ export async function readTransporterCustodyShipments(
   return allBatchesRaw
     .map((batchRaw) => ({
       batchId: Number(batchRaw.id),
-      trackingCode: String(batchRaw.trackingCode),
       origin: String(batchRaw.origin),
       weight: Number(batchRaw.weight),
       status: Number(batchRaw.status) === 0 ? ('ACTIVE' as const) : ('CONSUMED' as const),
