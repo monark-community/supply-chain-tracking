@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Nav } from '@/components/nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,9 +17,11 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Search, Clock, Package, AlertTriangle } from 'lucide-react';
-import { readBatchById } from '@/lib/chainproof-read';
+import { readBatchById, subscribeChainproofEvents } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
+
+type ReadBatchByIdResult = Awaited<ReturnType<typeof readBatchById>>;
 
 type BatchItem = {
   id: string;
@@ -97,6 +99,36 @@ function getStatusLabel(status: number) {
   }
 }
 
+function mapResultToBatchItem(result: ReadBatchByIdResult): BatchItem {
+  return {
+    id: String(result.batch.id),
+    batchNumber: `Batch #${result.batch.id}`,
+    product: result.batch.origin || 'Unknown Product',
+    weight: result.batch.weight,
+    currentWeight: result.batch.weight,
+    status: getStatusLabel(result.batch.status),
+    currentLocation: `Chain ${result.chainId}`,
+    currentCustodian: shortenAddress(result.batch.currentHandler),
+    lastUpdate: formatTimestamp(result.batch.updatedAt),
+    traces: result.timeline.length,
+    details: {
+      chainId: result.chainId,
+      contractAddress: result.contractAddress,
+      creator: result.batch.creator,
+      origin: result.batch.origin,
+      ipfsHash: result.batch.ipfsHash,
+      weight: result.batch.weight,
+      status: result.batch.status,
+      createdAt: result.batch.createdAt,
+      updatedAt: result.batch.updatedAt,
+      currentHandler: result.batch.currentHandler,
+      parents: result.parents,
+      children: result.children,
+      timeline: result.timeline,
+    },
+  };
+}
+
 export default function BatchesPage() {
   const { account } = useWalletAuth();
   const storageKey = useMemo(() => getStorageKey(account), [account]);
@@ -159,33 +191,7 @@ export default function BatchesPage() {
         throw new Error('Enter a valid batch id.');
       }
       const result = await readBatchById(parsed);
-      const item: BatchItem = {
-        id: String(result.batch.id),
-        batchNumber: `Batch #${result.batch.id}`,
-        product: result.batch.origin || 'Unknown Product',
-        weight: result.batch.weight,
-        currentWeight: result.batch.weight,
-        status: getStatusLabel(result.batch.status),
-        currentLocation: `Chain ${result.chainId}`,
-        currentCustodian: shortenAddress(result.batch.currentHandler),
-        lastUpdate: formatTimestamp(result.batch.updatedAt),
-        traces: result.timeline.length,
-        details: {
-          chainId: result.chainId,
-          contractAddress: result.contractAddress,
-          creator: result.batch.creator,
-          origin: result.batch.origin,
-          ipfsHash: result.batch.ipfsHash,
-          weight: result.batch.weight,
-          status: result.batch.status,
-          createdAt: result.batch.createdAt,
-          updatedAt: result.batch.updatedAt,
-          currentHandler: result.batch.currentHandler,
-          parents: result.parents,
-          children: result.children,
-          timeline: result.timeline,
-        },
-      };
+      const item = mapResultToBatchItem(result);
 
       setBatches((current) => {
         const existingIndex = current.findIndex((batch) => batch.id === item.id);
@@ -210,6 +216,60 @@ export default function BatchesPage() {
       setTrackingSubmitting(false);
     }
   };
+
+  const trackedIdsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    trackedIdsRef.current = new Set(batches.map((b) => Number(b.id)).filter((n) => Number.isFinite(n) && n > 0));
+  }, [batches]);
+
+  const refreshBatch = useCallback(async (batchId: number) => {
+    if (!trackedIdsRef.current.has(batchId)) return;
+    try {
+      const result = await readBatchById(batchId);
+      const item = mapResultToBatchItem(result);
+      setBatches((current) => current.map((b) => (b.id === item.id ? item : b)));
+      setSelectedBatch((current) => (current?.id === item.id ? item : current));
+    } catch {
+      // batch may have been consumed or transiently unreadable; leave existing card alone
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!account || !hasHydratedStorage) return;
+    let cancelled = false;
+    let unsubscribe: (() => Promise<void>) | null = null;
+
+    subscribeChainproofEvents({ onBatchUpdate: refreshBatch })
+      .then((u) => {
+        if (cancelled) {
+          void u();
+        } else {
+          unsubscribe = u;
+        }
+      })
+      .catch(() => {
+        // swallow subscription errors so the page still works
+      });
+
+    return () => {
+      cancelled = true;
+      void unsubscribe?.();
+    };
+  }, [account, hasHydratedStorage, refreshBatch]);
+
+  useEffect(() => {
+    if (!hasHydratedStorage) return;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      const ids = Array.from(trackedIdsRef.current);
+      ids.forEach((id) => void refreshBatch(id));
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [hasHydratedStorage, refreshBatch]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -289,9 +349,11 @@ export default function BatchesPage() {
         <Dialog open={!!selectedBatch} onOpenChange={(open) => (!open ? setSelectedBatch(null) : undefined)}>
           <DialogContent className="max-h-[80vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>{selectedBatch?.batchNumber || 'Batch details'}</DialogTitle>
+              <DialogTitle>{selectedBatch?.product || 'Batch details'}</DialogTitle>
               <DialogDescription>
-                {selectedBatch?.product || 'Tracked batch'} {selectedBatch?.details ? 'with full journey history.' : ''}
+                {selectedBatch
+                  ? `${selectedBatch.batchNumber}${selectedBatch.details ? "'s full journey history." : ''}`
+                  : 'Tracked batch'}
               </DialogDescription>
             </DialogHeader>
             {selectedBatch && (
@@ -403,7 +465,7 @@ export default function BatchesPage() {
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="flex items-center space-x-3">
-                          <h3 className="text-lg font-semibold text-gray-900">{batch.batchNumber}</h3>
+                          <h3 className="text-lg font-semibold text-gray-900">{batch.product}</h3>
                           <Badge className={getStatusColor(batch.status)}>
                             {batch.status.replace('_', ' ')}
                           </Badge>
@@ -418,7 +480,7 @@ export default function BatchesPage() {
                             );
                           })()}
                         </div>
-                        <p className="mt-1 text-sm text-gray-600">{batch.product}</p>
+                        <p className="mt-1 text-xs text-gray-500">{batch.batchNumber}</p>
                         {(() => {
                           const envAlert = getBatchEnvironmentAlert(Number(batch.id));
                           if (!envAlert.hasData || !envAlert.breached) return null;

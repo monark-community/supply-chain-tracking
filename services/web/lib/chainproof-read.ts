@@ -146,6 +146,54 @@ export async function readPredictedNextBatchId(): Promise<number> {
   return batchCount + 1;
 }
 
+export type ChainproofEventHandlers = {
+  onBatchUpdate: (batchId: number) => void;
+};
+
+export async function subscribeChainproofEvents(
+  handlers: ChainproofEventHandlers
+): Promise<() => Promise<void>> {
+  const context = await createChainproofReadContext();
+  const { contract, provider } = context;
+
+  const notify = (batchId: number) => {
+    if (Number.isFinite(batchId) && batchId > 0) handlers.onBatchUpdate(batchId);
+  };
+
+  const onTransferInitiated = (id: bigint) => notify(Number(id));
+  const onReceived = (id: bigint) => notify(Number(id));
+  const onSplit = (parentId: bigint, childIds: readonly bigint[]) => {
+    notify(Number(parentId));
+    childIds.forEach((c) => notify(Number(c)));
+  };
+  const onMerged = (inputBatchIds: readonly bigint[], outputBatchId: bigint) => {
+    inputBatchIds.forEach((c) => notify(Number(c)));
+    notify(Number(outputBatchId));
+  };
+  const onTransformed = (
+    inputBatchIds: readonly bigint[],
+    outputBatchId: bigint
+  ) => {
+    inputBatchIds.forEach((c) => notify(Number(c)));
+    notify(Number(outputBatchId));
+  };
+
+  await contract.on('BatchTransferInitiated', onTransferInitiated);
+  await contract.on('BatchReceived', onReceived);
+  await contract.on('BatchSplit', onSplit);
+  await contract.on('BatchMerged', onMerged);
+  await contract.on('BatchTransformed', onTransformed);
+
+  return async () => {
+    await contract.off('BatchTransferInitiated', onTransferInitiated);
+    await contract.off('BatchReceived', onReceived);
+    await contract.off('BatchSplit', onSplit);
+    await contract.off('BatchMerged', onMerged);
+    await contract.off('BatchTransformed', onTransformed);
+    provider.destroy();
+  };
+}
+
 export async function readBatchById(batchId: number) {
   const context = await createChainproofReadContext();
   if (!Number.isFinite(batchId) || batchId <= 0) {
