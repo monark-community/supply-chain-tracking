@@ -4,8 +4,8 @@ import { createConfig, http } from 'wagmi';
 import { injected, walletConnect } from 'wagmi/connectors';
 import type { Chain } from 'viem';
 
-const configuredRpcUrl = process.env.NEXT_PUBLIC_CHAINPROOF_RPC_URL || 'http://127.0.0.1:8545';
-const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAINPROOF_CHAIN_ID || '1337');
+const configuredRpcUrl = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || 'http://127.0.0.1:8545';
+const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
 const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '';
 
 export const enableManualWalletFallback = process.env.NEXT_PUBLIC_ENABLE_MANUAL_WALLET === 'true';

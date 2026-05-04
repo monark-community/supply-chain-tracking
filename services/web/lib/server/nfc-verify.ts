@@ -27,7 +27,7 @@ function getDeviceSecret(hardwareId: string): string {
   const keys = parseDeviceKeysConfig();
   const byDevice = keys[hardwareId];
   if (byDevice) return byDevice;
-  return process.env.NFC_DEVICE_DEFAULT_SECRET || process.env.NEXT_PUBLIC_NFC_SIGNING_KEY || 'chainproof-demo-signing-key';
+  return process.env.NFC_DEVICE_DEFAULT_SECRET || 'chainproof-demo-signing-key';
 }
 
 function computeHmacSha256Trunc128Hex(canonical: string, key: string): string {

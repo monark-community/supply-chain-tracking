@@ -44,21 +44,20 @@ cp .env.example .env
 Set local values:
 
 ```env
+# --- Tenderly Virtual TestNet (only needed for `npm run deploy:tenderly`) ---
 TENDERLY_RPC_URL=http://127.0.0.1:8545
 TENDERLY_CHAIN_ID=1337
-DEPLOYER_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+TENDERLY_DEPLOYER_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
 
-CHAINPROOF_RPC_URL=http://127.0.0.1:8545
-CHAINPROOF_CHAIN_ID=1337
-CHAINPROOF_CONTRACT_KEY=chainproof
-CHAINPROOF_CONTRACT_VERSION=2.0.0
-CHAINPROOF_REGISTRY_PATH=/config/contracts.json
-CHAINPROOF_SIGNER_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+# --- ChainProof contract registry (deploy script) ---
+CONTRACT_REGISTRY_KEY=chainproof
+CONTRACT_REGISTRY_PATH=/config/contracts.json
+CONTRACT_VERSION=2.0.0
 ```
 
 Notes:
 
-- `CHAINPROOF_REGISTRY_PATH=/config/contracts.json` is okay; deploy script auto-falls back to local `services/smart-contracts/config/contracts.json` when `/config` is not present.
+- `CONTRACT_REGISTRY_PATH=/config/contracts.json` is okay; deploy script auto-falls back to local `services/smart-contracts/config/contracts.json` when `/config` is not present.
 - Use test keys only. Never use a real mainnet key.
 
 ### 2.2 Frontend `services/web/.env.local`
@@ -72,9 +71,9 @@ cp services/web/.env.example services/web/.env.local
 Set local values:
 
 ```env
-NEXT_PUBLIC_CHAINPROOF_RPC_URL=http://127.0.0.1:8545
-NEXT_PUBLIC_CHAINPROOF_CHAIN_ID=1337
-NEXT_PUBLIC_CHAINPROOF_CONTRACT_KEY=chainproof
+NEXT_PUBLIC_CHAIN_RPC_URL=http://127.0.0.1:8545
+NEXT_PUBLIC_CHAIN_ID=1337
+NEXT_PUBLIC_CONTRACT_REGISTRY_KEY=chainproof
 ```
 
 ## 3) Install dependencies
@@ -115,13 +114,9 @@ It will print funded accounts and private keys. Those are test-only keys for loc
 Set these in root `.env`:
 
 ```env
-TENDERLY_VIRTUAL_TESTNET_RPC_URL=https://virtual.mainnet.rpc.tenderly.co/<project>/<testnet>
-TENDERLY_VIRTUAL_TESTNET_CHAIN_ID=<your_virtual_chain_id>
+TENDERLY_RPC_URL=https://virtual.mainnet.rpc.tenderly.co/<project>/<testnet>
+TENDERLY_CHAIN_ID=<your_virtual_chain_id>
 TENDERLY_DEPLOYER_PRIVATE_KEY=0x<test_private_key>
-
-CHAINPROOF_RPC_URL=https://virtual.mainnet.rpc.tenderly.co/<project>/<testnet>
-CHAINPROOF_CHAIN_ID=<your_virtual_chain_id>
-CHAINPROOF_SIGNER_PRIVATE_KEY=0x<test_private_key>
 ```
 
 Then deploy:
@@ -224,13 +219,12 @@ Every time you restart local blockchain:
 
 ## Optional: Docker compose flow
 
-If preferred, run blockchain + dashboard with Docker:
+If preferred, run the local Hardhat blockchain with Docker:
 
 ```bash
-docker compose up chain dashboard
+docker compose up
 ```
 
 - Hardhat RPC is exposed on `localhost:8545`
-- Streamlit dashboard is exposed on `localhost:8501`
 
 You still run the web app from `services/web` with `npm run dev`.

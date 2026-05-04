@@ -92,8 +92,8 @@ const CHAINPROOF_WRITE_ABI = [
   'event BatchReceived(uint256 indexed id, address indexed receiver, uint256 timestamp)',
 ] as const;
 
-const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAINPROOF_CHAIN_ID || '1337');
-const defaultContractKey = process.env.NEXT_PUBLIC_CHAINPROOF_CONTRACT_KEY || 'chainproof';
+const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
+const defaultContractKey = process.env.NEXT_PUBLIC_CONTRACT_REGISTRY_KEY || 'chainproof';
 const PRODUCER_ROLE = 1;
 
 async function fetchRegistry(): Promise<RegistryShape> {

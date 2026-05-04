@@ -2,7 +2,7 @@
 
 export type AppRole = 'producer' | 'processor' | 'warehouse' | 'transporter' | 'customer' | 'none';
 
-export const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAINPROOF_CHAIN_ID || '1337');
+export const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
 
 export function normalizeChainId(value: string | number | bigint): number {
   if (typeof value === 'bigint') return Number(value);

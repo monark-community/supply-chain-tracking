@@ -2,11 +2,11 @@ const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
-const DEFAULT_CONTRACT_KEY = process.env.CHAINPROOF_CONTRACT_KEY || "chainproof";
-const DEFAULT_CONTRACT_VERSION = process.env.CHAINPROOF_CONTRACT_VERSION || "2.0.0";
+const DEFAULT_CONTRACT_KEY = process.env.CONTRACT_REGISTRY_KEY || "chainproof";
+const DEFAULT_CONTRACT_VERSION = process.env.CONTRACT_VERSION || "2.0.0";
 const LOCAL_REGISTRY_PATH = path.resolve(__dirname, "../config/contracts.json");
 const tenderlyDashboardUrl = process.env.TENDERLY_DASHBOARD_URL || "";
-const requestedRegistryPath = process.env.CHAINPROOF_REGISTRY_PATH || "";
+const requestedRegistryPath = process.env.CONTRACT_REGISTRY_PATH || "";
 const REGISTRY_PATH =
   requestedRegistryPath.startsWith("/config/") && !fs.existsSync("/config")
     ? LOCAL_REGISTRY_PATH

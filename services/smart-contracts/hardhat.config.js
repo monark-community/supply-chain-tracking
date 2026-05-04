@@ -1,22 +1,13 @@
 require("@nomicfoundation/hardhat-toolbox");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env.dev"), override: false });
 
 /** @type import('hardhat/config').HardhatUserConfig */
-const tenderlyRpcUrl =
-  process.env.TENDERLY_VIRTUAL_TESTNET_RPC_URL ||
-  process.env.TENDERLY_RPC_URL ||
-  "";
-const tenderlyChainId = process.env.TENDERLY_VIRTUAL_TESTNET_CHAIN_ID
-  ? Number(process.env.TENDERLY_VIRTUAL_TESTNET_CHAIN_ID)
-  : process.env.TENDERLY_CHAIN_ID
+const tenderlyRpcUrl = process.env.TENDERLY_RPC_URL || "";
+const tenderlyChainId = process.env.TENDERLY_CHAIN_ID
   ? Number(process.env.TENDERLY_CHAIN_ID)
   : undefined;
-const rawDeployerKey =
-  process.env.TENDERLY_DEPLOYER_PRIVATE_KEY ||
-  process.env.DEPLOYER_PRIVATE_KEY ||
-  "";
+const rawDeployerKey = process.env.TENDERLY_DEPLOYER_PRIVATE_KEY || "";
 const deployerKey = rawDeployerKey && !rawDeployerKey.startsWith("0x")
   ? `0x${rawDeployerKey}`
   : rawDeployerKey;

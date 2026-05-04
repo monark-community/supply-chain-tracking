@@ -26,7 +26,7 @@ export type AssignMyRoleResult = {
   contractAddress: string;
 };
 
-const defaultContractKey = process.env.NEXT_PUBLIC_CHAINPROOF_CONTRACT_KEY || 'chainproof';
+const defaultContractKey = process.env.NEXT_PUBLIC_CONTRACT_REGISTRY_KEY || 'chainproof';
 
 const ROLE_BY_VALUE: Record<number, AppRole> = {
   0: 'none',

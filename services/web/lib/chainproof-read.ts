@@ -61,9 +61,9 @@ export type TransporterCustodyShipment = {
   updatedAt: number;
 };
 
-const defaultRpcUrl = process.env.NEXT_PUBLIC_CHAINPROOF_RPC_URL || 'http://127.0.0.1:8545';
-const defaultContractKey = process.env.NEXT_PUBLIC_CHAINPROOF_CONTRACT_KEY || 'chainproof';
-const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAINPROOF_CHAIN_ID || '1337');
+const defaultRpcUrl = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || 'http://127.0.0.1:8545';
+const defaultContractKey = process.env.NEXT_PUBLIC_CONTRACT_REGISTRY_KEY || 'chainproof';
+const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
 
 async function fetchRegistry(): Promise<RegistryShape> {
   const response = await fetch('/api/blockchain/registry', { cache: 'no-store' });
