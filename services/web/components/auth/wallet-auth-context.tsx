@@ -580,20 +580,42 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (isMobileWalletSyncTarget()) {
-      return;
-    }
     void reconnectAsync().finally(() => {
       void refreshWalletState();
     });
   }, [reconnectAsync, refreshWalletState]);
 
   useEffect(() => {
-    if (isMobileWalletSyncTarget()) {
-      return;
-    }
     void refreshWalletState();
   }, [refreshWalletState, connectedAddress, connectorClient, activeConnector]);
+
+  useEffect(() => {
+    if (!isMobileWalletSyncTarget()) return;
+    const FOREGROUND_REFRESH_DEBOUNCE_MS = 700;
+
+    const maybeRefresh = () => {
+      const now = Date.now();
+      if (now - lastForegroundRefreshRef.current < FOREGROUND_REFRESH_DEBOUNCE_MS) return;
+      lastForegroundRefreshRef.current = now;
+      void refreshWalletState();
+    };
+
+    const onPageShow = () => {
+      maybeRefresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        maybeRefresh();
+      }
+    };
+
+    window.addEventListener('pageshow', onPageShow);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pageshow', onPageShow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [refreshWalletState]);
 
   useEffect(() => {
     if (!isDesktopWalletSyncTarget()) {
