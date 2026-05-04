@@ -8,8 +8,6 @@ const configuredRpcUrl = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || 'http://127.0.
 const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
 const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '';
 
-export const enableManualWalletFallback = process.env.NEXT_PUBLIC_ENABLE_MANUAL_WALLET === 'true';
-
 export const chainproofChain: Chain = {
   id: configuredChainId,
   name: `ChainProof Local (${configuredChainId})`,

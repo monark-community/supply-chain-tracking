@@ -4,8 +4,6 @@ import { Contract } from 'ethers';
 import { isAddress } from 'ethers';
 import type { Provider, Signer } from 'ethers';
 import { getActiveWalletSession } from './active-wallet-session';
-import { enableManualWalletFallback } from './wallet-client';
-import { restoreManualWalletSession } from './manual-wallet';
 
 type RegistryEntry = {
   chainId: number;
@@ -190,20 +188,7 @@ async function createChainproofWriteContext(
   contractKey: string = defaultContractKey
 ): Promise<ChainproofWriteContext> {
   const registry = await fetchRegistry();
-  let session = getActiveWalletSession();
-
-  if (!session && enableManualWalletFallback) {
-    const manualSession = await restoreManualWalletSession();
-    if (manualSession) {
-      session = {
-        provider: manualSession.provider,
-        signer: manualSession.wallet,
-        address: manualSession.address,
-        chainId: manualSession.chainId,
-        source: 'manual',
-      };
-    }
-  }
+  const session = getActiveWalletSession();
 
   if (!session) {
     throw new Error('No active wallet session. Connect a wallet first.');

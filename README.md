@@ -5,7 +5,7 @@ This README is the exact setup order for a new teammate to run the project local
 - Hardhat local blockchain
 - Contract deployment
 - Next.js web app
-- Manual private-key sign in
+- MetaMask / WalletConnect sign in
 
 ## 0) Prerequisites
 
@@ -166,9 +166,9 @@ Open:
 
 ## 7) Sign in on web app
 
-1. Go to login page.
-2. Paste one private key from Hardhat node output (for example Account #1).
-3. Click **Sign In**.
+1. Import one of the funded test accounts from the Hardhat node output into MetaMask (Settings -> Import account -> paste private key).
+2. Add the local network to MetaMask: RPC `http://127.0.0.1:8545`, Chain ID `1337`, Currency `ETH`.
+3. Open the login page and click **Connect MetaMask**, then approve the prompt.
 4. If role is `none`, assign role on-chain from the UI.
 
 ## 8) Quick verification checklist

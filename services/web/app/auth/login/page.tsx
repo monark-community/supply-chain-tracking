@@ -4,7 +4,6 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Package, Smartphone, Wallet } from 'lucide-react';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { shortenAddress } from '@/lib/wallet-auth';
@@ -17,8 +16,6 @@ function isAlreadyConnectedMessage(message: string) {
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [privateKey, setPrivateKey] = useState('');
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [localError, setLocalError] = useState('');
   const [connectingWalletId, setConnectingWalletId] = useState<string | null>(null);
   const redirectReason = searchParams.get('reason');
@@ -27,7 +24,6 @@ function LoginPageContent() {
     connectWallet,
     connectWalletWith,
     walletOptions,
-    manualWalletEnabled,
     status,
     role,
     account,
@@ -93,22 +89,6 @@ function LoginPageContent() {
       await connectWallet();
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Wallet sign-in failed. Please try again.');
-    } finally {
-      setConnectingWalletId(null);
-    }
-  };
-
-  const handleManualWalletLogin = async () => {
-    setLocalError('');
-    if (!privateKey.trim()) {
-      setLocalError('Enter a private key before signing in.');
-      return;
-    }
-    setConnectingWalletId('manual');
-    try {
-      await connectWallet(privateKey);
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Manual wallet sign-in failed. Please try again.');
     } finally {
       setConnectingWalletId(null);
     }
@@ -215,28 +195,6 @@ function LoginPageContent() {
                 Connected wallet is on the wrong chain. Tap WalletConnect and approve the chain switch/add prompt to recover automatically.
               </div>
             )}
-
-            {manualWalletEnabled ? (
-              <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-medium text-slate-800">Debug fallback (manual private key)</p>
-                <div className="flex gap-2">
-                  <Input
-                    id="login-private-key"
-                    value={privateKey}
-                    onChange={(event) => setPrivateKey(event.target.value)}
-                    placeholder="0x..."
-                    type={showPrivateKey ? 'text' : 'password'}
-                    autoComplete="off"
-                  />
-                  <Button type="button" variant="outline" onClick={() => setShowPrivateKey((value) => !value)}>
-                    {showPrivateKey ? 'Hide' : 'Show'}
-                  </Button>
-                </div>
-                <Button variant="outline" className="w-full" disabled={!privateKey.trim() || !!connectingWalletId} onClick={() => void handleManualWalletLogin()}>
-                  {connectingWalletId === 'manual' ? 'Signing In...' : 'Use Manual Private Key (Debug)'}
-                </Button>
-              </div>
-            ) : null}
           </CardContent>
         </Card>
       </div>

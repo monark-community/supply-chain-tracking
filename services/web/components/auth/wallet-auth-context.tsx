@@ -7,12 +7,10 @@ import { BrowserProvider, JsonRpcSigner } from 'ethers';
 import type { Eip1193Provider } from 'ethers';
 import { useAccount, useConnect, useConnectorClient, useDisconnect, useReconnect } from 'wagmi';
 import type { Connector } from 'wagmi';
-import type { ManualWalletContext } from '@/lib/manual-wallet';
-import { clearManualWalletSession, createAndPersistManualWalletSession, restoreManualWalletSession } from '@/lib/manual-wallet';
 import { assignMyWalletRole, resolveWalletRoleContext } from '@/lib/chainproof-auth';
 import type { AppRole } from '@/lib/wallet-auth';
 import { configuredChainId } from '@/lib/wallet-auth';
-import { chainproofChain, enableManualWalletFallback } from '@/lib/wallet-client';
+import { chainproofChain } from '@/lib/wallet-client';
 import { getActiveWalletSession, setActiveWalletSession } from '@/lib/active-wallet-session';
 
 type WalletAuthStatus =
@@ -53,8 +51,7 @@ type WalletAuthContextValue = {
   error: string | null;
   isConnected: boolean;
   walletOptions: WalletOption[];
-  manualWalletEnabled: boolean;
-  connectWallet: (privateKey?: string) => Promise<void>;
+  connectWallet: () => Promise<void>;
   connectWalletWith: (connectorId: string) => Promise<void>;
   disconnectWallet: () => Promise<void>;
   refreshWalletState: () => Promise<void>;
@@ -278,11 +275,10 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
 
   const hydrateAccountState = useCallback(
     async (session: {
-      provider: ManualWalletContext['provider'] | RuntimeWalletSession['provider'];
-      signer: ManualWalletContext['wallet'] | RuntimeWalletSession['signer'];
+      provider: RuntimeWalletSession['provider'];
+      signer: RuntimeWalletSession['signer'];
       address: string;
       chainId: number;
-      source: 'wallet' | 'manual';
     }) => {
       const settledChainId = session.chainId;
 
@@ -293,7 +289,6 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         signer: session.signer,
         address: session.address,
         chainId: settledChainId,
-        source: session.source,
       });
 
       if (Number.isFinite(configuredChainId) && configuredChainId > 0 && settledChainId !== configuredChainId) {
@@ -378,23 +373,8 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
             ...runtime,
             address: settledAddress,
             chainId: settledChainId,
-            source: 'wallet',
           });
           return;
-        }
-
-        if (enableManualWalletFallback) {
-          const manualSession = await restoreManualWalletSession();
-          if (manualSession) {
-            await hydrateAccountState({
-              provider: manualSession.provider,
-              signer: manualSession.wallet,
-              address: manualSession.address,
-              chainId: manualSession.chainId,
-              source: 'manual',
-            });
-            return;
-          }
         }
 
         setActiveWalletSession(null);
@@ -453,7 +433,6 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
             ...runtime,
             address: snapshot.address ?? runtime.address,
             chainId: snapshot.chainId ?? runtime.chainId,
-            source: 'wallet',
           });
         } catch {
           await refreshWalletState();
@@ -500,22 +479,10 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   );
 
   const connectWallet = useCallback(
-    async (privateKey?: string) => {
+    async () => {
       try {
         setStatus('connecting');
         setError(null);
-
-        if (enableManualWalletFallback && privateKey && privateKey.trim()) {
-          const session = await createAndPersistManualWalletSession(privateKey);
-          await hydrateAccountState({
-            provider: session.provider,
-            signer: session.wallet,
-            address: session.address,
-            chainId: session.chainId,
-            source: 'manual',
-          });
-          return;
-        }
 
         const preferred =
           connectors.find((connector) => connector.id === 'io.metamask') ??
@@ -530,7 +497,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         setError(err instanceof Error ? err.message : 'Wallet sign-in failed.');
       }
     },
-    [connectWithConnector, connectors, hydrateAccountState]
+    [connectWithConnector, connectors]
   );
 
   const disconnectWallet = useCallback(async () => {
@@ -539,7 +506,6 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // keep cleanup resilient
     }
-    clearManualWalletSession();
     setActiveWalletSession(null);
     setError(null);
     clearAuthState();
@@ -740,7 +706,6 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       error,
       isConnected: !!account,
       walletOptions,
-      manualWalletEnabled: enableManualWalletFallback,
       connectWallet,
       connectWalletWith,
       disconnectWallet,

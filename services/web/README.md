@@ -14,7 +14,6 @@ Copy `.env.example` to `.env.local` and set:
 - `NEXT_PUBLIC_CHAIN_ID`: local chain id (for example `1337`)
 - `NEXT_PUBLIC_CONTRACT_REGISTRY_KEY`: registry key (default `chainproof`)
 - `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`: WalletConnect project id (required for mobile/iOS WalletConnect)
-- `NEXT_PUBLIC_ENABLE_MANUAL_WALLET`: optional debug fallback (`true`/`false`) to allow private-key login form
 - `NFC_DEVICE_DEFAULT_SECRET`: server-side default secret used by `/api/nfc/verify` to verify signed NFC query payloads
 - `NFC_DEVICE_KEYS_JSON`: optional server-side per-device secret map JSON
 
@@ -62,6 +61,5 @@ Open from desktop at `http://localhost:3000`.
 
 - Contract writes are signed by the currently connected wallet account.
 - On-chain role checks still determine allowed actions.
-- Manual private-key mode is intentionally hidden behind `NEXT_PUBLIC_ENABLE_MANUAL_WALLET=true` for debugging only.
 - Hardware no longer stores an authoritative active batch on the tag.
 - Producer harvest binds or re-binds `hardware_id` to the latest batch on-chain.
