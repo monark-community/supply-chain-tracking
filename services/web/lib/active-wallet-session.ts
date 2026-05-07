@@ -7,6 +7,7 @@ export type ActiveWalletSession = {
   signer: Signer;
   address: string;
   chainId: number;
+  connectorId: string | null;
 };
 
 let activeSession: ActiveWalletSession | null = null;

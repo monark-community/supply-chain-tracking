@@ -2,12 +2,13 @@
 
 import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { AlertTriangle, Package, Shield, Search, Eye, Bluetooth } from 'lucide-react';
+import { AlertTriangle, Package, Shield, Search, Eye, Bluetooth, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
 import { receiveTransferredBatchById } from '@/lib/chainproof-write';
 import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
 import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
+import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 
 type TxFeedback = {
   type: 'success' | 'error';
@@ -16,12 +17,33 @@ type TxFeedback = {
 };
 
 export function CustomerDashboard() {
+  const { getWriteSession, wakeWalletApp } = useWalletAuth();
   const [receiveSubmitting, setReceiveSubmitting] = useState(false);
   const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+  const [receivePendingConnector, setReceivePendingConnector] = useState<string | null>(null);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
   const [loadingHardwareBatch, setLoadingHardwareBatch] = useState(false);
   const { isNfcConnected, isConnecting, nfcDeviceName, connectionError, connectNfcDevice, readActiveBatchIdFromHardware } =
     useNfcBleBridge();
+
+  const renderWalletConnectHint = (pendingConnector: string | null) => {
+    if (pendingConnector !== 'walletConnect') return null;
+    return (
+      <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+        <p className="font-medium">Open MetaMask app to approve the transaction.</p>
+        <p>If MetaMask did not open automatically, tap the button below.</p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => wakeWalletApp(pendingConnector)}
+        >
+          <ExternalLink className="mr-2 h-4 w-4" />
+          Open MetaMask
+        </Button>
+      </div>
+    );
+  };
 
   const recentVerifications = [
     { product: 'Organic Coffee Beans', batch: 'BATCH-A1B2C3', verified: true, time: '5 min ago', origin: 'Green Valley Farms' },
@@ -34,6 +56,7 @@ export function CustomerDashboard() {
     event.preventDefault();
     setReceiveSubmitting(true);
     setReceiveFeedback(null);
+    setReceivePendingConnector(null);
     try {
       let batchId = activeBatchId;
       if (!batchId) {
@@ -46,7 +69,10 @@ export function CustomerDashboard() {
       }
       if (!batchId) throw new Error('No active batch id was found on connected hardware.');
       setActiveBatchId(batchId);
-      const result = await receiveTransferredBatchById({ batchId });
+      const session = await getWriteSession();
+      setReceivePendingConnector(session.connectorId);
+      wakeWalletApp(session.connectorId);
+      const result = await receiveTransferredBatchById({ batchId }, session);
       setReceiveFeedback({
         type: 'success',
         message: `Batch ${result.batchId} received successfully.`,
@@ -59,6 +85,7 @@ export function CustomerDashboard() {
       });
     } finally {
       setReceiveSubmitting(false);
+      setReceivePendingConnector(null);
     }
   };
 
@@ -169,6 +196,7 @@ export function CustomerDashboard() {
                 {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
               </p>
             )}
+            {receiveSubmitting ? renderWalletConnectHint(receivePendingConnector) : null}
             <Button className="w-full" disabled={receiveSubmitting || !isNfcConnected || !activeBatchId}>
               {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
             </Button>

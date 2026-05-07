@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { ArrowRightLeft, Package, Search } from 'lucide-react';
+import { ArrowRightLeft, ExternalLink, Package, Search } from 'lucide-react';
 import { harvestProducerBatch, initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
 import { readBatchById, readBatchIdByHardwareId } from '@/lib/chainproof-read';
 import { consumePendingNfcScan } from '@/lib/nfc-scan-session';
@@ -26,7 +26,7 @@ type PendingScanSnapshot = ResolvedNfcScanContext;
 
 export default function ScannerPage() {
   const router = useRouter();
-  const { role, isConnected, account, status } = useWalletAuth();
+  const { role, isConnected, account, status, getWriteSession, wakeWalletApp } = useWalletAuth();
   const [scanSnapshot, setScanSnapshot] = useState<PendingScanSnapshot | null>(null);
 
   useEffect(() => {
@@ -40,13 +40,16 @@ export default function ScannerPage() {
   const [hardwareIdInput, setHardwareIdInput] = useState('');
   const [harvestSubmitting, setHarvestSubmitting] = useState(false);
   const [harvestFeedback, setHarvestFeedback] = useState<TxFeedback | null>(null);
+  const [harvestPendingConnector, setHarvestPendingConnector] = useState<string | null>(null);
 
   const [transferRecipient, setTransferRecipient] = useState('');
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferFeedback, setTransferFeedback] = useState<TxFeedback | null>(null);
+  const [transferPendingConnector, setTransferPendingConnector] = useState<string | null>(null);
 
   const [receiveSubmitting, setReceiveSubmitting] = useState(false);
   const [receiveFeedback, setReceiveFeedback] = useState<TxFeedback | null>(null);
+  const [receivePendingConnector, setReceivePendingConnector] = useState<string | null>(null);
 
   const [verifyLookup, setVerifyLookup] = useState('');
   const [verifySubmitting, setVerifySubmitting] = useState(false);
@@ -75,15 +78,22 @@ export default function ScannerPage() {
     event.preventDefault();
     setHarvestSubmitting(true);
     setHarvestFeedback(null);
+    setHarvestPendingConnector(null);
     try {
       const weight = Number(weightInput);
       const hardwareId = hardwareIdInput.trim();
       if (!hardwareId) throw new Error('Hardware id is required for producer harvest binding.');
-      const result = await harvestProducerBatch({
-        origin,
-        weight,
-        hardwareId,
-      });
+      const session = await getWriteSession();
+      setHarvestPendingConnector(session.connectorId);
+      wakeWalletApp(session.connectorId);
+      const result = await harvestProducerBatch(
+        {
+          origin,
+          weight,
+          hardwareId,
+        },
+        session
+      );
       setHarvestFeedback({
         type: 'success',
         message: `Batch ${result.newBatchId ?? 'created'} harvested and hardware mapping updated on-chain.`,
@@ -113,6 +123,7 @@ export default function ScannerPage() {
       });
     } finally {
       setHarvestSubmitting(false);
+      setHarvestPendingConnector(null);
     }
   };
 
@@ -120,9 +131,13 @@ export default function ScannerPage() {
     event.preventDefault();
     setTransferSubmitting(true);
     setTransferFeedback(null);
+    setTransferPendingConnector(null);
     try {
       if (!activeBatchId) throw new Error('No resolved batch from NFC deep link.');
-      const result = await initiateBatchTransferById({ batchId: activeBatchId, to: transferRecipient });
+      const session = await getWriteSession();
+      setTransferPendingConnector(session.connectorId);
+      wakeWalletApp(session.connectorId);
+      const result = await initiateBatchTransferById({ batchId: activeBatchId, to: transferRecipient }, session);
       setTransferFeedback({
         type: 'success',
         message: `Transfer initiated for batch ${result.batchId}.`,
@@ -136,6 +151,7 @@ export default function ScannerPage() {
       });
     } finally {
       setTransferSubmitting(false);
+      setTransferPendingConnector(null);
     }
   };
 
@@ -143,9 +159,13 @@ export default function ScannerPage() {
     event.preventDefault();
     setReceiveSubmitting(true);
     setReceiveFeedback(null);
+    setReceivePendingConnector(null);
     try {
       if (!activeBatchId) throw new Error('No resolved batch from NFC deep link.');
-      const result = await receiveTransferredBatchById({ batchId: activeBatchId });
+      const session = await getWriteSession();
+      setReceivePendingConnector(session.connectorId);
+      wakeWalletApp(session.connectorId);
+      const result = await receiveTransferredBatchById({ batchId: activeBatchId }, session);
       setReceiveFeedback({
         type: 'success',
         message: `Batch ${result.batchId} received successfully.`,
@@ -158,6 +178,7 @@ export default function ScannerPage() {
       });
     } finally {
       setReceiveSubmitting(false);
+      setReceivePendingConnector(null);
     }
   };
 
@@ -197,6 +218,25 @@ export default function ScannerPage() {
     );
   };
 
+  const renderWalletConnectHint = (pendingConnector: string | null) => {
+    if (pendingConnector !== 'walletConnect') return null;
+    return (
+      <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+        <p className="font-medium">Open MetaMask app to approve the transaction.</p>
+        <p>If MetaMask did not open automatically, tap the button below.</p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => wakeWalletApp(pendingConnector)}
+        >
+          <ExternalLink className="mr-2 h-4 w-4" />
+          Open MetaMask
+        </Button>
+      </div>
+    );
+  };
+
   const renderTransferForm = (prefix: string, title = 'Initiate Transfer') => (
     <form onSubmit={handleTransfer} className="space-y-3 rounded-lg border bg-white p-4">
       <h4 className="font-semibold text-gray-900">{title}</h4>
@@ -212,6 +252,7 @@ export default function ScannerPage() {
         />
       </div>
       {renderTxFeedback(transferFeedback)}
+      {transferSubmitting ? renderWalletConnectHint(transferPendingConnector) : null}
       <Button className="w-full" disabled={transferSubmitting || !activeBatchId || !transferRecipient.trim()}>
         <ArrowRightLeft className="mr-2 h-4 w-4" />
         {transferSubmitting ? 'Submitting...' : 'Initiate Transfer'}
@@ -224,6 +265,7 @@ export default function ScannerPage() {
       <h4 className="font-semibold text-gray-900">{title}</h4>
       <p className="text-xs text-slate-600">Resolved batch from NFC: {activeBatchId ?? 'Not available'}</p>
       {renderTxFeedback(receiveFeedback)}
+      {receiveSubmitting ? renderWalletConnectHint(receivePendingConnector) : null}
       <Button className="w-full" disabled={receiveSubmitting || !activeBatchId}>
         <Package className="mr-2 h-4 w-4" />
         {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}
@@ -278,6 +320,7 @@ export default function ScannerPage() {
               />
             </div>
             {renderTxFeedback(harvestFeedback)}
+            {harvestSubmitting ? renderWalletConnectHint(harvestPendingConnector) : null}
             <Button className="w-full" disabled={harvestSubmitting || !hardwareIdInput.trim()}>
               <Package className="mr-2 h-4 w-4" />
               {harvestSubmitting ? 'Submitting...' : 'Harvest & Bind Hardware'}

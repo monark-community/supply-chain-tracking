@@ -3,7 +3,7 @@
 import { Contract } from 'ethers';
 import { isAddress } from 'ethers';
 import type { Provider, Signer } from 'ethers';
-import { getActiveWalletSession } from './active-wallet-session';
+import type { ActiveWalletSession } from './active-wallet-session';
 
 type RegistryEntry = {
   chainId: number;
@@ -156,14 +156,10 @@ function mapWriteError(
 }
 
 async function createChainproofWriteContext(
+  session: ActiveWalletSession,
   contractKey: string = defaultContractKey
 ): Promise<ChainproofWriteContext> {
   const registry = await fetchRegistry();
-  const session = getActiveWalletSession();
-
-  if (!session) {
-    throw new Error('No active wallet session. Connect a wallet first.');
-  }
 
   const { provider, signer, address: account } = session;
   const network = await provider.getNetwork();
@@ -203,7 +199,10 @@ function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data:
   return null;
 }
 
-export async function harvestProducerBatch(input: HarvestProducerBatchInput): Promise<HarvestProducerBatchResult> {
+export async function harvestProducerBatch(
+  input: HarvestProducerBatchInput,
+  session: ActiveWalletSession
+): Promise<HarvestProducerBatchResult> {
   const origin = input.origin.trim();
   const hardwareId = input.hardwareId?.trim() || '';
   const weight = Math.floor(input.weight);
@@ -217,7 +216,7 @@ export async function harvestProducerBatch(input: HarvestProducerBatchInput): Pr
   }
 
   try {
-    const context = await createChainproofWriteContext();
+    const context = await createChainproofWriteContext(session);
     const role = Number(await context.contract.roles(context.account));
     if (role !== PRODUCER_ROLE) {
       throw new Error('Role not allowed');
@@ -272,10 +271,11 @@ async function initiateBatchTransferByIdWithContext(
 }
 
 export async function initiateBatchTransferById(
-  input: InitiateBatchTransferByIdInput
+  input: InitiateBatchTransferByIdInput,
+  session: ActiveWalletSession
 ): Promise<InitiateBatchTransferResult> {
   try {
-    const context = await createChainproofWriteContext();
+    const context = await createChainproofWriteContext(session);
     return initiateBatchTransferByIdWithContext(context, input);
   } catch (error) {
     throw mapWriteError(error);
@@ -303,10 +303,11 @@ async function receiveTransferredBatchByIdWithContext(
 }
 
 export async function receiveTransferredBatchById(
-  input: ReceiveTransferredBatchByIdInput
+  input: ReceiveTransferredBatchByIdInput,
+  session: ActiveWalletSession
 ): Promise<ReceiveTransferredBatchResult> {
   try {
-    const context = await createChainproofWriteContext();
+    const context = await createChainproofWriteContext(session);
     return receiveTransferredBatchByIdWithContext(context, input);
   } catch (error) {
     throw mapWriteError(error);

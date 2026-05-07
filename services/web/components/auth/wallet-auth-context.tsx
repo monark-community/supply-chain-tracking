@@ -11,7 +11,7 @@ import { assignMyWalletRole, resolveWalletRoleContext } from '@/lib/chainproof-a
 import type { AppRole } from '@/lib/wallet-auth';
 import { configuredChainId } from '@/lib/wallet-auth';
 import { chainproofChain } from '@/lib/wallet-client';
-import { getActiveWalletSession, setActiveWalletSession } from '@/lib/active-wallet-session';
+import { setActiveWalletSession } from '@/lib/active-wallet-session';
 
 type WalletAuthStatus =
   | 'idle'
@@ -41,6 +41,14 @@ type RuntimeWalletSession = {
   chainId: number;
 };
 
+export type WriteSession = {
+  provider: BrowserProvider;
+  signer: JsonRpcSigner;
+  address: string;
+  chainId: number;
+  connectorId: string | null;
+};
+
 type WalletAuthContextValue = {
   status: WalletAuthStatus;
   account: string | null;
@@ -57,6 +65,8 @@ type WalletAuthContextValue = {
   refreshWalletState: () => Promise<void>;
   syncMobileWalletAccount: () => Promise<void>;
   assignMyRole: (role: Exclude<AppRole, 'none'>) => Promise<void>;
+  getWriteSession: () => Promise<WriteSession>;
+  wakeWalletApp: (connectorId?: string | null) => void;
 };
 
 const WalletAuthContext = createContext<WalletAuthContextValue | undefined>(undefined);
@@ -169,6 +179,52 @@ function isRecoverableConnectorError(error: unknown) {
     message.includes('pending') ||
     message.includes('resource unavailable')
   );
+}
+
+type WalletConnectLikeProvider = EventedEip1193Provider & {
+  session?: {
+    expiry?: number;
+    peer?: {
+      metadata?: {
+        redirect?: {
+          native?: string;
+          universal?: string;
+        };
+      };
+    };
+  };
+};
+
+function readWalletConnectRedirect(provider: WalletConnectLikeProvider | null | undefined): string | null {
+  const native = provider?.session?.peer?.metadata?.redirect?.native;
+  if (typeof native === 'string' && native.length > 0) {
+    return native;
+  }
+  return null;
+}
+
+function isWalletConnectSessionAlive(provider: WalletConnectLikeProvider | null | undefined): boolean {
+  if (!provider) return false;
+  const session = provider.session;
+  if (!session) return false;
+  if (typeof session.expiry === 'number') {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (session.expiry <= nowSeconds) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function openMetaMaskDeepLink(redirectNative: string | null) {
+  if (typeof window === 'undefined') return;
+  const target = redirectNative || 'metamask://';
+  try {
+    // Custom-protocol navigation hands off to the OS without unloading the page.
+    window.location.href = target;
+  } catch {
+    // best effort
+  }
 }
 
 function walletClientToRuntimeSession(client: Client<Transport, Chain, Account>): RuntimeWalletSession {
@@ -286,6 +342,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       signer: RuntimeWalletSession['signer'];
       address: string;
       chainId: number;
+      connectorId: string | null;
     }) => {
       const settledChainId = session.chainId;
 
@@ -296,6 +353,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         signer: session.signer,
         address: session.address,
         chainId: settledChainId,
+        connectorId: session.connectorId,
       });
 
       if (Number.isFinite(configuredChainId) && configuredChainId > 0 && settledChainId !== configuredChainId) {
@@ -386,6 +444,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
             ...runtime,
             address: settledAddress,
             chainId: settledChainId,
+            connectorId: activeConnector?.id ?? null,
           });
           return;
         }
@@ -446,6 +505,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
             ...runtime,
             address: snapshot.address ?? runtime.address,
             chainId: snapshot.chainId ?? runtime.chainId,
+            connectorId: connector.id,
           });
         } catch {
           await refreshWalletState();
@@ -538,20 +598,101 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     await refreshWalletState();
   }, [refreshWalletState]);
 
+  const getWriteSession = useCallback(async (): Promise<WriteSession> => {
+    if (!activeConnector) {
+      throw new Error('No active wallet connector. Reconnect to continue.');
+    }
+
+    const rawProvider = (await activeConnector.getProvider()) as WalletConnectLikeProvider | undefined;
+    if (!rawProvider?.request) {
+      throw new Error('Wallet provider is unavailable. Reconnect to continue.');
+    }
+
+    if (activeConnector.id === 'walletConnect') {
+      if (!isWalletConnectSessionAlive(rawProvider)) {
+        await disconnectAsync().catch(() => undefined);
+        setActiveWalletSession(null);
+        clearAuthState();
+        throw new Error('Wallet session expired. Reconnect to continue.');
+      }
+      try {
+        const accountsValue = await rawProvider.request({ method: 'eth_accounts' });
+        const accounts = Array.isArray(accountsValue) ? accountsValue : [];
+        if (accounts.length === 0) {
+          await disconnectAsync().catch(() => undefined);
+          setActiveWalletSession(null);
+          clearAuthState();
+          throw new Error('Wallet session expired. Reconnect to continue.');
+        }
+      } catch (err) {
+        if (err instanceof Error && /Wallet session expired/.test(err.message)) {
+          throw err;
+        }
+        // best effort liveness probe; fall through to construct the signer
+      }
+    }
+
+    const passiveSnapshot = await readPassiveProviderSnapshot(rawProvider);
+    const address = passiveSnapshot?.address ?? connectedAddress ?? null;
+    if (!address) {
+      throw new Error('Wallet account is unavailable. Reconnect to continue.');
+    }
+
+    const provider = new BrowserProvider(rawProvider as Eip1193Provider);
+    const network = await provider.getNetwork();
+    const chainIdValue = Number(network.chainId);
+
+    if (Number.isFinite(configuredChainId) && configuredChainId > 0 && chainIdValue !== configuredChainId) {
+      throw new Error(`Wrong RPC network. Configure chain ${configuredChainId} and retry.`);
+    }
+
+    const signer = new JsonRpcSigner(provider, address);
+    const connectorId = activeConnector.id;
+
+    setActiveWalletSession({
+      provider,
+      signer,
+      address,
+      chainId: chainIdValue,
+      connectorId,
+    });
+
+    return {
+      provider,
+      signer,
+      address,
+      chainId: chainIdValue,
+      connectorId,
+    };
+  }, [activeConnector, clearAuthState, connectedAddress, disconnectAsync]);
+
+  const wakeWalletApp = useCallback(
+    (overrideConnectorId?: string | null) => {
+      const targetConnectorId = overrideConnectorId ?? activeConnector?.id ?? null;
+      if (targetConnectorId !== 'walletConnect') return;
+      if (typeof window === 'undefined') return;
+      void (async () => {
+        let redirectNative: string | null = null;
+        try {
+          if (activeConnector) {
+            const rawProvider = (await activeConnector.getProvider()) as WalletConnectLikeProvider | undefined;
+            redirectNative = readWalletConnectRedirect(rawProvider);
+          }
+        } catch {
+          redirectNative = null;
+        }
+        openMetaMaskDeepLink(redirectNative);
+      })();
+    },
+    [activeConnector]
+  );
+
   const assignMyRole = useCallback(
     async (targetRole: Exclude<AppRole, 'none'>) => {
       try {
         setError(null);
-        let session = getActiveWalletSession();
-        if (!session) {
-          await refreshWalletState();
-          session = getActiveWalletSession();
-        }
-        if (!session) {
-          setStatus('disconnected');
-          setError('No active wallet session. Sign in first.');
-          return;
-        }
+        const session = await getWriteSession();
+        wakeWalletApp(session.connectorId);
 
         await assignMyWalletRole(targetRole, {
           provider: session.provider,
@@ -564,7 +705,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         setError(err instanceof Error ? err.message : 'Role assignment failed.');
       }
     },
-    [refreshWalletState]
+    [getWriteSession, refreshWalletState, wakeWalletApp]
   );
 
   useEffect(() => {
@@ -737,6 +878,8 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       refreshWalletState,
       syncMobileWalletAccount,
       assignMyRole,
+      getWriteSession,
+      wakeWalletApp,
     }),
     [
       status,
@@ -753,6 +896,8 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
       refreshWalletState,
       syncMobileWalletAccount,
       assignMyRole,
+      getWriteSession,
+      wakeWalletApp,
     ]
   );
 
