@@ -215,6 +215,13 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const lastForegroundRefreshRef = useRef<number>(0);
+  // Set during disconnectWallet so the auto-rehydrate paths (refreshWalletState
+  // and the auto-reconnect effect) don't undo our cleared state while wagmi is
+  // still propagating the disconnect through useAccount / useConnectorClient.
+  const disconnectInProgressRef = useRef(false);
+  // Auto-reconnect is meant to fire only on initial mount; this ref keeps it
+  // from re-firing every time refreshWalletState's identity changes.
+  const didTryInitialReconnectRef = useRef(false);
 
   const { address: connectedAddress, connector: activeConnector, isConnected } = useAccount();
   const { connectAsync, connectors } = useConnect();
@@ -324,6 +331,12 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     const task = (async () => {
       try {
         setError(null);
+
+        if (disconnectInProgressRef.current) {
+          setActiveWalletSession(null);
+          clearAuthState();
+          return;
+        }
 
         let passiveSnapshot: { address: string | null; chainId: number | null } | null = null;
         if (activeConnector) {
@@ -501,6 +514,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   );
 
   const disconnectWallet = useCallback(async () => {
+    disconnectInProgressRef.current = true;
     try {
       await disconnectAsync();
     } catch {
@@ -509,6 +523,14 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     setActiveWalletSession(null);
     setError(null);
     clearAuthState();
+    // Hold the guard long enough for wagmi to finish propagating disconnect
+    // through useAccount / useConnectorClient and persist its "user
+    // disconnected" intent. Anything shorter and the auto-rehydrate paths can
+    // still race us by reading eth_accounts off the still-attached wallet
+    // provider and restoring the account we just cleared.
+    window.setTimeout(() => {
+      disconnectInProgressRef.current = false;
+    }, 1000);
   }, [clearAuthState, disconnectAsync]);
 
   const syncMobileWalletAccount = useCallback(async () => {
@@ -546,6 +568,9 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    if (didTryInitialReconnectRef.current) return;
+    if (disconnectInProgressRef.current) return;
+    didTryInitialReconnectRef.current = true;
     void reconnectAsync().finally(() => {
       void refreshWalletState();
     });
