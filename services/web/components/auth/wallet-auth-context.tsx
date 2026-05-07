@@ -486,7 +486,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
 
         const preferred =
           connectors.find((connector) => connector.id === 'io.metamask') ??
-          connectors.find((connector) => connector.id === 'injected') ??
+          connectors.find((connector) => connector.id === 'walletConnect') ??
           connectors[0];
         if (!preferred) {
           throw new Error('No wallet connector is available.');

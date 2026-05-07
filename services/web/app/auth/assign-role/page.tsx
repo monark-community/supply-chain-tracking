@@ -59,12 +59,8 @@ export default function AssignRolePage() {
       router.replace('/auth/login?reason=session_error');
       return;
     }
-    if (status === 'disconnected') {
-      router.replace('/auth/login');
-      return;
-    }
     if (!account && status !== 'connecting' && status !== 'idle') {
-      router.replace('/auth/login');
+      router.replace('/');
       return;
     }
     if (role !== 'none' && status === 'connected') {

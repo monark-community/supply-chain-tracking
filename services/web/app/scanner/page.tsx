@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { Nav } from '@/components/nav';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -24,8 +25,15 @@ type TxFeedback = {
 type PendingScanSnapshot = ResolvedNfcScanContext;
 
 export default function ScannerPage() {
-  const { role, isConnected } = useWalletAuth();
+  const router = useRouter();
+  const { role, isConnected, account, status } = useWalletAuth();
   const [scanSnapshot, setScanSnapshot] = useState<PendingScanSnapshot | null>(null);
+
+  useEffect(() => {
+    if (!account && status !== 'connecting' && status !== 'idle') {
+      router.replace('/');
+    }
+  }, [account, router, status]);
 
   const [origin, setOrigin] = useState('');
   const [weightInput, setWeightInput] = useState('');
@@ -358,6 +366,20 @@ export default function ScannerPage() {
   };
 
   const roleLabel = activeRole === 'none' ? 'No role assigned' : activeRole;
+
+  if (!isConnected) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Nav />
+        <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-16 text-center sm:px-6 lg:px-8">
+          <h1 className="text-xl font-semibold text-gray-900">Sign in required</h1>
+          <p className="text-sm text-gray-600">
+            Batch Actions are only available to signed-in wallets. Redirecting to the dashboard...
+          </p>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">

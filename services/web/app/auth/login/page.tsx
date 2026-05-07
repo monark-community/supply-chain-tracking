@@ -4,10 +4,14 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Package, Smartphone, Wallet } from 'lucide-react';
+import { Package, QrCode, Smartphone } from 'lucide-react';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
+import { MetaMaskFoxIcon } from '@/components/icons/metamask-fox';
 import { shortenAddress } from '@/lib/wallet-auth';
 import { readPendingNfcScan } from '@/lib/nfc-scan-session';
+
+const METAMASK_CONNECTOR_ID = 'io.metamask';
+const WALLETCONNECT_CONNECTOR_ID = 'walletConnect';
 
 function isAlreadyConnectedMessage(message: string) {
   return message.toLowerCase().includes('already connected');
@@ -21,7 +25,6 @@ function LoginPageContent() {
   const redirectReason = searchParams.get('reason');
 
   const {
-    connectWallet,
     connectWalletWith,
     walletOptions,
     status,
@@ -31,26 +34,12 @@ function LoginPageContent() {
     error,
   } = useWalletAuth();
 
-  const sortedWalletOptions = useMemo(
-    () => {
-      const isMetaMaskOption = (option: { id: string; name: string }) =>
-        option.id === 'io.metamask' || /metamask/i.test(option.name);
-      const isInjectedOption = (option: { id: string; name: string }) =>
-        option.id === 'injected' || /injected/i.test(option.name);
-
-      const hasMetaMask = walletOptions.some(isMetaMaskOption);
-      const filteredOptions = hasMetaMask
-        ? walletOptions.filter((option) => isMetaMaskOption(option) || !isInjectedOption(option))
-        : walletOptions;
-
-      return [...filteredOptions].sort((a, b) => {
-        const aMetaMask = /metamask/i.test(a.name);
-        const bMetaMask = /metamask/i.test(b.name);
-        if (aMetaMask && !bMetaMask) return -1;
-        if (!aMetaMask && bMetaMask) return 1;
-        return a.name.localeCompare(b.name);
-      });
-    },
+  const metaMaskOption = useMemo(
+    () => walletOptions.find((option) => option.id === METAMASK_CONNECTOR_ID),
+    [walletOptions]
+  );
+  const walletConnectOption = useMemo(
+    () => walletOptions.find((option) => option.id === WALLETCONNECT_CONNECTOR_ID),
     [walletOptions]
   );
 
@@ -75,18 +64,6 @@ function LoginPageContent() {
     setConnectingWalletId(walletId);
     try {
       await connectWalletWith(walletId);
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Wallet sign-in failed. Please try again.');
-    } finally {
-      setConnectingWalletId(null);
-    }
-  };
-
-  const handleDefaultWalletLogin = async () => {
-    setLocalError('');
-    setConnectingWalletId('default');
-    try {
-      await connectWallet();
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Wallet sign-in failed. Please try again.');
     } finally {
@@ -140,39 +117,71 @@ function LoginPageContent() {
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{redirectReasonMessage}</div>
             ) : null}
 
-            <div className="rounded-lg border-2 border-dashed border-blue-200 bg-blue-50 p-6 text-center">
-              <Wallet className="mx-auto h-12 w-12 text-blue-600" />
-              <p className="mt-2 text-sm font-medium text-gray-900">Connect with MetaMask or WalletConnect</p>
-            </div>
-
-            <div className="space-y-2">
-              {sortedWalletOptions.length > 0 ? (
-                sortedWalletOptions.map((option) => (
-                  <Button
-                    key={option.id}
-                    onClick={() => void handleWalletLogin(option.id)}
-                    className="w-full"
-                    variant={/metamask/i.test(option.name) ? 'default' : 'outline'}
-                    disabled={status === 'connecting' || !!connectingWalletId}
-                  >
-                    <Wallet className="mr-2 h-4 w-4" />
-                    {connectingWalletId === option.id ? 'Connecting...' : `Connect ${option.name}`}
-                  </Button>
-                ))
-              ) : (
-                <Button onClick={() => void handleDefaultWalletLogin()} className="w-full" disabled={status === 'connecting' || !!connectingWalletId}>
-                  <Wallet className="mr-2 h-4 w-4" />
-                  {connectingWalletId === 'default' ? 'Connecting...' : 'Connect Wallet'}
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Button
+                  onClick={() => void handleWalletLogin(METAMASK_CONNECTOR_ID)}
+                  disabled={!metaMaskOption || status === 'connecting' || !!connectingWalletId}
+                  className="h-auto w-full justify-start gap-3 bg-[#f6851b] py-3 text-white hover:bg-[#e2761b] disabled:bg-[#f6851b]/60"
+                >
+                  <MetaMaskFoxIcon className="h-7 w-7 shrink-0" />
+                  <div className="flex flex-col items-start text-left leading-tight">
+                    <span className="text-sm font-semibold">
+                      {connectingWalletId === METAMASK_CONNECTOR_ID ? 'Connecting...' : 'Connect MetaMask'}
+                    </span>
+                    <span className="text-xs font-normal opacity-90">Browser extension &middot; one-click</span>
+                  </div>
                 </Button>
-              )}
-            </div>
+                {!metaMaskOption ? (
+                  <p className="px-1 text-xs text-gray-500">
+                    MetaMask extension not detected.{' '}
+                    <a
+                      href="https://metamask.io/download/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline hover:text-gray-700"
+                    >
+                      Install MetaMask
+                    </a>{' '}
+                    or use the option below.
+                  </p>
+                ) : null}
+              </div>
 
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-              <p className="font-semibold">Apple device note</p>
-              <p className="mt-1 inline-flex items-center gap-1">
-                <Smartphone className="h-3.5 w-3.5" />
-                On iOS, use WalletConnect and approve in MetaMask app.
-              </p>
+              <div className="space-y-1.5">
+                <Button
+                  variant="outline"
+                  onClick={() => void handleWalletLogin(WALLETCONNECT_CONNECTOR_ID)}
+                  disabled={!walletConnectOption || status === 'connecting' || !!connectingWalletId}
+                  className="h-auto w-full justify-start gap-3 py-3"
+                >
+                  <QrCode className="h-7 w-7 shrink-0 text-blue-600" />
+                  <div className="flex flex-col items-start text-left leading-tight">
+                    <span className="text-sm font-semibold text-gray-900">
+                      {connectingWalletId === WALLETCONNECT_CONNECTOR_ID
+                        ? 'Opening...'
+                        : 'Scan QR or use Mobile MetaMask'}
+                    </span>
+                    <span className="text-xs font-normal text-gray-500">
+                      WalletConnect &middot; phone, tablet, or other wallet apps
+                    </span>
+                  </div>
+                </Button>
+                {walletConnectOption ? (
+                  <p className="inline-flex items-center gap-1 px-1 text-xs text-amber-700">
+                    <Smartphone className="h-3.5 w-3.5" />
+                    On iOS, tap this and approve in the MetaMask app.
+                  </p>
+                ) : (
+                  <p className="px-1 text-xs text-gray-500">
+                    WalletConnect not configured. Set{' '}
+                    <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px]">
+                      NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+                    </code>{' '}
+                    to enable QR / mobile sign-in.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">

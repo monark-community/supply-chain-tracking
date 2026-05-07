@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { Package, MapPin, LayoutDashboard, QrCode } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -17,11 +17,25 @@ const CHANGEABLE_ROLES: Array<Exclude<AppRole, 'none' | 'processor' | 'customer'
   'transporter',
 ];
 
-const navigation = [
+type NavItem = {
+  name: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  requiresAuth?: boolean;
+};
+
+const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Batches', href: '/batches', icon: MapPin },
-  { name: 'Batch Actions', href: '/scanner', icon: QrCode },
+  { name: 'Batch Actions', href: '/scanner', icon: QrCode, requiresAuth: true },
 ];
+
+const MOBILE_GRID_COLS: Record<number, string> = {
+  1: 'grid-cols-1',
+  2: 'grid-cols-2',
+  3: 'grid-cols-3',
+  4: 'grid-cols-4',
+};
 
 export function Nav() {
   const pathname = usePathname();
@@ -30,6 +44,12 @@ export function Nav() {
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const { isConnected, disconnectWallet, account, role, assignMyRole, syncMobileWalletAccount } = useWalletAuth();
+
+  const visibleNavigation = useMemo(
+    () => navigation.filter((item) => !item.requiresAuth || isConnected),
+    [isConnected]
+  );
+  const mobileGridClass = MOBILE_GRID_COLS[visibleNavigation.length] ?? 'grid-cols-3';
 
   const handleChangeRole = async () => {
     if (!nextRole) return;
@@ -67,7 +87,7 @@ export function Nav() {
               <span className="truncate text-lg font-bold text-gray-900 sm:text-xl">ChainProof</span>
             </Link>
             <nav className="ml-10 hidden space-x-1 md:flex">
-              {navigation.map((item) => {
+              {visibleNavigation.map((item) => {
                 const Icon = item.icon;
                 const isActive = pathname === item.href;
                 return (
@@ -118,8 +138,8 @@ export function Nav() {
         </div>
 
         <div className="border-t border-gray-200 py-3 md:hidden">
-          <nav className="grid grid-cols-3 gap-2">
-            {navigation.map((item) => {
+          <nav className={cn('grid gap-2', mobileGridClass)}>
+            {visibleNavigation.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
               return (
