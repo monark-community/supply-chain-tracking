@@ -58,9 +58,6 @@ async function main() {
   console.log("Chain ID:", chainId);
   console.log("ChainProof deployed to:", address);
   console.log("Owner/Admin address:", deployer.address);
-  if (networkName === "tenderly" && tenderlyDashboardUrl) {
-    console.log("Tenderly dashboard:", tenderlyDashboardUrl);
-  }
   if (account1 && account2 && account3 && account4 && account5) {
     console.log("Suggested demo accounts:");
     console.log("  Producer   ->", account1.address);
