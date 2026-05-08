@@ -220,8 +220,14 @@ function openMetaMaskDeepLink(redirectNative: string | null) {
   if (typeof window === 'undefined') return;
   const target = redirectNative || 'metamask://';
   try {
-    // Custom-protocol navigation hands off to the OS without unloading the page.
-    window.location.href = target;
+    // Use window.open(target, '_self', 'noreferrer noopener') instead of
+    // assigning to window.location.href. iOS Safari treats a custom-protocol
+    // navigation initiated via location.href as a "pending navigation" and
+    // can re-evaluate it (re-showing the "Open in MetaMask?" system sheet)
+    // when the tab regains focus after the user returns from MetaMask.
+    // window.open is treated as a discrete user-initiated action and matches
+    // the pattern used by WalletConnect's own handleDeeplinkRedirect.
+    window.open(target, '_self', 'noreferrer noopener');
   } catch {
     // best effort
   }

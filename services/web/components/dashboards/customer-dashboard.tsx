@@ -5,13 +5,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertTriangle, Package, Shield, Search, Eye, Bluetooth, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
-import { receiveTransferredBatchById } from '@/lib/chainproof-write';
+import { PendingTxTimeoutError, receiveTransferredBatchById } from '@/lib/chainproof-write';
 import { useNfcBleBridge } from '@/hooks/useNfcBleBridge';
 import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
 
 type TxFeedback = {
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'pending';
   message: string;
   txHash?: string;
 };
@@ -25,6 +25,34 @@ export function CustomerDashboard() {
   const [loadingHardwareBatch, setLoadingHardwareBatch] = useState(false);
   const { isNfcConnected, isConnecting, nfcDeviceName, connectionError, connectNfcDevice, readActiveBatchIdFromHardware } =
     useNfcBleBridge();
+
+  const renderTxFeedback = (feedback: TxFeedback | null) => {
+    if (!feedback) return null;
+    if (feedback.type === 'pending') {
+      return (
+        <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>{feedback.message}</p>
+          {feedback.txHash ? <p className="text-xs break-all">tx: {feedback.txHash}</p> : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (typeof window !== 'undefined') window.location.reload();
+            }}
+          >
+            Refresh page
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <p className={`text-sm ${feedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+        {feedback.message}
+        {feedback.txHash ? ` tx: ${feedback.txHash}` : ''}
+      </p>
+    );
+  };
 
   const renderWalletConnectHint = (pendingConnector: string | null) => {
     if (pendingConnector !== 'walletConnect') return null;
@@ -79,10 +107,18 @@ export function CustomerDashboard() {
         txHash: result.txHash,
       });
     } catch (error) {
-      setReceiveFeedback({
-        type: 'error',
-        message: error instanceof Error ? error.message : 'Receive transaction failed.',
-      });
+      if (error instanceof PendingTxTimeoutError) {
+        setReceiveFeedback({
+          type: 'pending',
+          message:
+            'We could not confirm the receipt in time. The transaction may still go through — refresh to verify status.',
+        });
+      } else {
+        setReceiveFeedback({
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Receive transaction failed.',
+        });
+      }
     } finally {
       setReceiveSubmitting(false);
       setReceivePendingConnector(null);
@@ -190,12 +226,7 @@ export function CustomerDashboard() {
                 </Button>
               </div>
             </div>
-            {receiveFeedback && (
-              <p className={`text-sm ${receiveFeedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
-                {receiveFeedback.message}
-                {receiveFeedback.txHash ? ` tx: ${receiveFeedback.txHash}` : ''}
-              </p>
-            )}
+            {renderTxFeedback(receiveFeedback)}
             {receiveSubmitting ? renderWalletConnectHint(receivePendingConnector) : null}
             <Button className="w-full" disabled={receiveSubmitting || !isNfcConnected || !activeBatchId}>
               {receiveSubmitting ? 'Submitting...' : 'Receive Batch'}

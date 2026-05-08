@@ -10,14 +10,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ArrowRightLeft, ExternalLink, Package, Search } from 'lucide-react';
-import { harvestProducerBatch, initiateBatchTransferById, receiveTransferredBatchById } from '@/lib/chainproof-write';
+import {
+  harvestProducerBatch,
+  initiateBatchTransferById,
+  PendingTxTimeoutError,
+  receiveTransferredBatchById,
+} from '@/lib/chainproof-write';
 import { readBatchById, readBatchIdByHardwareId } from '@/lib/chainproof-read';
 import { consumePendingNfcScan } from '@/lib/nfc-scan-session';
 import type { AppRole } from '@/lib/wallet-auth';
 import type { ResolvedNfcScanContext } from '@/lib/nfc-scan-payload';
 
 type TxFeedback = {
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'pending';
   message: string;
   txHash?: string;
 };
@@ -117,10 +122,18 @@ export default function ScannerPage() {
       setOrigin('');
       setWeightInput('');
     } catch (errorObj) {
-      setHarvestFeedback({
-        type: 'error',
-        message: errorObj instanceof Error ? errorObj.message : 'Failed to create batch.',
-      });
+      if (errorObj instanceof PendingTxTimeoutError) {
+        setHarvestFeedback({
+          type: 'pending',
+          message:
+            'We could not confirm the harvest in time. The transaction may still go through — refresh to verify status.',
+        });
+      } else {
+        setHarvestFeedback({
+          type: 'error',
+          message: errorObj instanceof Error ? errorObj.message : 'Failed to create batch.',
+        });
+      }
     } finally {
       setHarvestSubmitting(false);
       setHarvestPendingConnector(null);
@@ -145,10 +158,18 @@ export default function ScannerPage() {
       });
       setTransferRecipient('');
     } catch (err) {
-      setTransferFeedback({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Transfer initiation failed.',
-      });
+      if (err instanceof PendingTxTimeoutError) {
+        setTransferFeedback({
+          type: 'pending',
+          message:
+            'We could not confirm the transfer in time. The transaction may still go through — refresh to verify status.',
+        });
+      } else {
+        setTransferFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Transfer initiation failed.',
+        });
+      }
     } finally {
       setTransferSubmitting(false);
       setTransferPendingConnector(null);
@@ -172,10 +193,18 @@ export default function ScannerPage() {
         txHash: result.txHash,
       });
     } catch (err) {
-      setReceiveFeedback({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Receive transaction failed.',
-      });
+      if (err instanceof PendingTxTimeoutError) {
+        setReceiveFeedback({
+          type: 'pending',
+          message:
+            'We could not confirm the receipt in time. The transaction may still go through — refresh to verify status.',
+        });
+      } else {
+        setReceiveFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Receive transaction failed.',
+        });
+      }
     } finally {
       setReceiveSubmitting(false);
       setReceivePendingConnector(null);
@@ -210,6 +239,24 @@ export default function ScannerPage() {
 
   const renderTxFeedback = (feedback: TxFeedback | null) => {
     if (!feedback) return null;
+    if (feedback.type === 'pending') {
+      return (
+        <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>{feedback.message}</p>
+          {feedback.txHash ? <p className="text-xs break-all">tx: {feedback.txHash}</p> : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (typeof window !== 'undefined') window.location.reload();
+            }}
+          >
+            Refresh page
+          </Button>
+        </div>
+      );
+    }
     return (
       <p className={`text-sm ${feedback.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
         {feedback.message}

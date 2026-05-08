@@ -1,8 +1,8 @@
 'use client';
 
-import { Contract } from 'ethers';
+import { Contract, JsonRpcProvider } from 'ethers';
 import { isAddress } from 'ethers';
-import type { Provider, Signer } from 'ethers';
+import type { ContractEventPayload, Provider, Signer, TransactionReceipt } from 'ethers';
 import type { ActiveWalletSession } from './active-wallet-session';
 
 type RegistryEntry = {
@@ -85,6 +85,111 @@ const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
 const defaultContractKey = process.env.NEXT_PUBLIC_CONTRACT_REGISTRY_KEY || 'chainproof';
 const PRODUCER_ROLE = 1;
 
+// Public RPC is independent of WalletConnect and stays healthy across mobile
+// tab background/foreground cycles. We use it for receipt polling and event
+// watching so the UI never blocks on a paused WC websocket.
+const PUBLIC_RPC_URL = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || 'http://127.0.0.1:8545';
+const PENDING_TX_TIMEOUT_MS = 90_000;
+
+function getPublicProvider(): JsonRpcProvider {
+  const provider = new JsonRpcProvider(PUBLIC_RPC_URL);
+  // Default ethers v6 polling is 4s; tighten it so the event watcher reacts
+  // quickly on testnets/local chains while the WC channel may still be paused.
+  provider.pollingInterval = 1500;
+  return provider;
+}
+
+export class PendingTxTimeoutError extends Error {
+  constructor() {
+    super('Transaction may still be pending. Refresh to verify status.');
+    this.name = 'PendingTxTimeoutError';
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new PendingTxTimeoutError());
+    }, ms);
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+type EventListenerHandle<T> = {
+  promise: Promise<T>;
+  cleanup: () => Promise<void>;
+};
+
+// When `contract.on(filter, listener)` is attached using a *deferred* topic
+// filter (e.g. `contract.filters.BatchHarvested(null, account)`), ethers v6
+// internally sets `fragment = null` and emits an empty decoded-args array.
+// The listener therefore only receives the `ContractEventPayload`, which
+// itself carries the decoded args + the underlying log. We expose that
+// directly so callers don't accidentally read `args[0]` and pick up the
+// payload object instead of the indexed bigint.
+type ParsedEvent = {
+  payload: ContractEventPayload;
+  args: ReadonlyArray<unknown>;
+  log: { blockNumber: number; transactionHash: string };
+};
+
+function watchContractEvent<T>(
+  contract: Contract,
+  filter: ReturnType<Contract['filters'][string]>,
+  parse: (event: ParsedEvent) => T | undefined,
+  options: { minBlockNumber: number }
+): EventListenerHandle<T> {
+  let listener: ((...args: unknown[]) => void) | null = null;
+  const promise = new Promise<T>((resolve) => {
+    const handler = (...rawArgs: unknown[]) => {
+      const payload = rawArgs[rawArgs.length - 1] as ContractEventPayload | undefined;
+      if (!payload?.log) return;
+      // Stale-event guard: only resolve for events that happened AFTER the
+      // caller captured its snapshot block. This protects against any prior
+      // BatchHarvested(_, account) / BatchTransferInitiated(...) / BatchReceived(...)
+      // log being replayed by the node's filter implementation.
+      if (typeof payload.log.blockNumber !== 'number' || payload.log.blockNumber <= options.minBlockNumber) {
+        return;
+      }
+      const decoded =
+        (payload as unknown as { args?: ReadonlyArray<unknown> }).args ?? [];
+      const value = parse({ payload, args: decoded, log: payload.log });
+      if (value !== undefined) {
+        resolve(value);
+      }
+    };
+    listener = handler;
+    void contract.on(filter, handler);
+  });
+  const cleanup = async () => {
+    if (!listener) return;
+    try {
+      await contract.off(filter, listener);
+    } catch {
+      // best effort; the contract may already be torn down
+    } finally {
+      listener = null;
+    }
+  };
+  return { promise, cleanup };
+}
+
 async function fetchRegistry(): Promise<RegistryShape> {
   const response = await fetch('/api/blockchain/registry', { cache: 'no-store' });
   if (!response.ok) {
@@ -110,6 +215,11 @@ function mapWriteError(
     roleNotAllowedMessage?: string;
   }
 ): Error {
+  // Preserve the timeout discriminator so callers can branch on `instanceof`.
+  if (error instanceof PendingTxTimeoutError) {
+    return error;
+  }
+
   const message = error instanceof Error ? error.message : 'Transaction failed.';
   const lowered = message.toLowerCase();
 
@@ -183,8 +293,11 @@ async function createChainproofWriteContext(
   return { provider, signer, contract, chainId, contractAddress, account };
 }
 
-function getHarvestedBatchId(contract: Contract, receipt: { logs?: Array<{ data: string; topics: string[] }> } | null) {
-  const logs = receipt?.logs || [];
+function getHarvestedBatchId(
+  contract: Contract,
+  receipt: { logs?: ReadonlyArray<{ data: string; topics: ReadonlyArray<string> }> } | null
+) {
+  const logs = receipt?.logs ?? [];
   for (const log of logs) {
     try {
       const parsed = contract.interface.parseLog(log);
@@ -222,23 +335,62 @@ export async function harvestProducerBatch(
       throw new Error('Role not allowed');
     }
 
-    // The deployed contract still requires a trackingCode argument; we pass an empty string,
-    // which short-circuits in `_registerTrackingCode` so no tracking-code mapping is created.
-    const tx = hardwareId
-      ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), '', hardwareId)
-      : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), '');
-    const receipt = await tx.wait();
-    const newBatchId = getHarvestedBatchId(context.contract, receipt);
+    const publicProvider = getPublicProvider();
+    const publicContract = new Contract(context.contractAddress, CHAINPROOF_WRITE_ABI, publicProvider);
 
-    return {
+    const buildResult = (newBatchId: number | null, txHash: string): HarvestProducerBatchResult => ({
       chainId: context.chainId,
       contractAddress: context.contractAddress,
-      txHash: String(tx.hash),
+      txHash,
       newBatchId,
       account: context.account,
       ipfsHash,
       hardwareId: hardwareId || null,
-    };
+    });
+
+    // Snapshot the chain head BEFORE we attach the listener. Any
+    // BatchHarvested(_, account) event that surfaces from a block at or
+    // before this snapshot is from a previous harvest and must not be
+    // mistaken for "this click's" success.
+    const snapshotBlock = await publicProvider.getBlockNumber();
+
+    // Public-RPC event watcher: independent of WalletConnect, so it surfaces
+    // success even when the wallet's WS channel was paused while the user
+    // was approving the tx in MetaMask Mobile.
+    const filter = publicContract.filters.BatchHarvested(null, context.account);
+    const eventHandle = watchContractEvent<HarvestProducerBatchResult>(
+      publicContract,
+      filter,
+      ({ args, log }) => {
+        const id = args[0];
+        const batchId = typeof id === 'bigint' ? Number(id) : null;
+        return buildResult(batchId, log.transactionHash);
+      },
+      { minBlockNumber: snapshotBlock }
+    );
+
+    // Wallet promise: dispatch via the connector, then poll the receipt over
+    // the public RPC (NOT through `tx.wait()`, which routes back through WC).
+    const walletPromise = (async (): Promise<HarvestProducerBatchResult> => {
+      // The deployed contract still requires a trackingCode argument; we pass an empty string,
+      // which short-circuits in `_registerTrackingCode` so no tracking-code mapping is created.
+      const tx = hardwareId
+        ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), '', hardwareId)
+        : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), '');
+      const receipt = (await publicProvider.waitForTransaction(tx.hash)) as TransactionReceipt | null;
+      const newBatchId = receipt ? getHarvestedBatchId(context.contract, receipt) : null;
+      return buildResult(newBatchId, String(tx.hash));
+    })();
+
+    try {
+      return await withTimeout(
+        Promise.race([walletPromise, eventHandle.promise]),
+        PENDING_TX_TIMEOUT_MS
+      );
+    } finally {
+      void eventHandle.cleanup();
+      walletPromise.catch(() => undefined);
+    }
   } catch (error) {
     throw mapWriteError(error, { roleNotAllowedMessage: 'Connected wallet is not assigned the Producer role.' });
   }
@@ -257,17 +409,47 @@ async function initiateBatchTransferByIdWithContext(
     throw new Error('Batch id is invalid.');
   }
 
-  const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
-  await tx.wait();
+  const publicProvider = getPublicProvider();
+  const publicContract = new Contract(context.contractAddress, CHAINPROOF_WRITE_ABI, publicProvider);
 
-  return {
+  const buildResult = (txHash: string): InitiateBatchTransferResult => ({
     chainId: context.chainId,
     contractAddress: context.contractAddress,
-    txHash: String(tx.hash),
+    txHash,
     account: context.account,
     batchId,
     to: recipient,
-  };
+  });
+
+  // Snapshot the chain head BEFORE we attach the listener so we ignore any
+  // BatchTransferInitiated(batchId, account, _) log replayed from before
+  // this click.
+  const snapshotBlock = await publicProvider.getBlockNumber();
+
+  // Filter by (batchId, from = sender) so we only resolve on the exact transfer.
+  const filter = publicContract.filters.BatchTransferInitiated(BigInt(batchId), context.account);
+  const eventHandle = watchContractEvent<InitiateBatchTransferResult>(
+    publicContract,
+    filter,
+    ({ log }) => buildResult(log.transactionHash),
+    { minBlockNumber: snapshotBlock }
+  );
+
+  const walletPromise = (async (): Promise<InitiateBatchTransferResult> => {
+    const tx = await context.contract.initiateTransfer(BigInt(batchId), recipient);
+    await publicProvider.waitForTransaction(tx.hash);
+    return buildResult(String(tx.hash));
+  })();
+
+  try {
+    return await withTimeout(
+      Promise.race([walletPromise, eventHandle.promise]),
+      PENDING_TX_TIMEOUT_MS
+    );
+  } finally {
+    void eventHandle.cleanup();
+    walletPromise.catch(() => undefined);
+  }
 }
 
 export async function initiateBatchTransferById(
@@ -290,16 +472,46 @@ async function receiveTransferredBatchByIdWithContext(
   if (!Number.isFinite(batchId) || batchId <= 0) {
     throw new Error('Batch id is invalid.');
   }
-  const tx = await context.contract.receiveBatch(BigInt(batchId));
-  await tx.wait();
 
-  return {
+  const publicProvider = getPublicProvider();
+  const publicContract = new Contract(context.contractAddress, CHAINPROOF_WRITE_ABI, publicProvider);
+
+  const buildResult = (txHash: string): ReceiveTransferredBatchResult => ({
     chainId: context.chainId,
     contractAddress: context.contractAddress,
-    txHash: String(tx.hash),
+    txHash,
     account: context.account,
     batchId,
-  };
+  });
+
+  // Snapshot the chain head BEFORE we attach the listener so we ignore any
+  // BatchReceived(batchId, account, _) log replayed from before this click.
+  const snapshotBlock = await publicProvider.getBlockNumber();
+
+  // Filter by (batchId, receiver = sender) so we only resolve on the exact receipt.
+  const filter = publicContract.filters.BatchReceived(BigInt(batchId), context.account);
+  const eventHandle = watchContractEvent<ReceiveTransferredBatchResult>(
+    publicContract,
+    filter,
+    ({ log }) => buildResult(log.transactionHash),
+    { minBlockNumber: snapshotBlock }
+  );
+
+  const walletPromise = (async (): Promise<ReceiveTransferredBatchResult> => {
+    const tx = await context.contract.receiveBatch(BigInt(batchId));
+    await publicProvider.waitForTransaction(tx.hash);
+    return buildResult(String(tx.hash));
+  })();
+
+  try {
+    return await withTimeout(
+      Promise.race([walletPromise, eventHandle.promise]),
+      PENDING_TX_TIMEOUT_MS
+    );
+  } finally {
+    void eventHandle.cleanup();
+    walletPromise.catch(() => undefined);
+  }
 }
 
 export async function receiveTransferredBatchById(
