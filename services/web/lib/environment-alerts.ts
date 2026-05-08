@@ -1,7 +1,6 @@
 'use client';
 
-export const BATCH_ENV_SNAPSHOT_STORAGE_KEY = 'chainproof:batch-env-snapshots:v1';
-export const BATCH_ENV_UPDATE_EVENT = 'chainproof:batch-env-updated';
+const BATCH_ENV_SNAPSHOT_STORAGE_KEY = 'chainproof:batch-env-snapshots:v1';
 
 const TEMP_MIN_ALLOWED_C = -5;
 const TEMP_MAX_ALLOWED_C = 27;
@@ -28,16 +27,6 @@ export type BatchEnvironmentAlert = {
   snapshot: StoredBatchEnvSnapshot | null;
 };
 
-type NfcPayloadSnapshotInput = {
-  tempMin: number;
-  tempMax: number;
-  humiMin: number;
-  humiMax: number;
-  flag2: number;
-  hasBatchId: boolean;
-  batchId: number | null;
-};
-
 function canUseWindow() {
   return typeof window !== 'undefined';
 }
@@ -52,11 +41,6 @@ function readSnapshotMap(): BatchEnvSnapshotMap {
   } catch {
     return {};
   }
-}
-
-function writeSnapshotMap(value: BatchEnvSnapshotMap) {
-  if (!canUseWindow()) return;
-  window.localStorage.setItem(BATCH_ENV_SNAPSHOT_STORAGE_KEY, JSON.stringify(value));
 }
 
 function buildBreachDetails(snapshot: StoredBatchEnvSnapshot): string[] {
@@ -77,24 +61,6 @@ function buildBreachDetails(snapshot: StoredBatchEnvSnapshot): string[] {
   }
 
   return details;
-}
-
-export function saveBatchEnvironmentSnapshot(snapshot: NfcPayloadSnapshotInput) {
-  if (!canUseWindow() || !snapshot.hasBatchId || !snapshot.batchId) return;
-
-  const key = String(snapshot.batchId);
-  const current = readSnapshotMap();
-  current[key] = {
-    batchId: snapshot.batchId,
-    tempMin: snapshot.tempMin,
-    tempMax: snapshot.tempMax,
-    humiMin: snapshot.humiMin,
-    humiMax: snapshot.humiMax,
-    flag2: snapshot.flag2,
-    capturedAt: Date.now(),
-  };
-  writeSnapshotMap(current);
-  window.dispatchEvent(new CustomEvent(BATCH_ENV_UPDATE_EVENT, { detail: { batchId: snapshot.batchId } }));
 }
 
 export function getBatchEnvironmentAlert(batchId: number | null | undefined): BatchEnvironmentAlert {

@@ -85,16 +85,14 @@ const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || '1337');
 const defaultContractKey = process.env.NEXT_PUBLIC_CONTRACT_REGISTRY_KEY || 'chainproof';
 const PRODUCER_ROLE = 1;
 
-// Public RPC is independent of WalletConnect and stays healthy across mobile
-// tab background/foreground cycles. We use it for receipt polling and event
-// watching so the UI never blocks on a paused WC websocket.
+// Keep reads on a plain RPC provider so mobile WalletConnect pauses do not
+// block receipt/event detection after the user returns from MetaMask.
 const PUBLIC_RPC_URL = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || 'http://127.0.0.1:8545';
 const PENDING_TX_TIMEOUT_MS = 90_000;
 
 function getPublicProvider(): JsonRpcProvider {
   const provider = new JsonRpcProvider(PUBLIC_RPC_URL);
-  // Default ethers v6 polling is 4s; tighten it so the event watcher reacts
-  // quickly on testnets/local chains while the WC channel may still be paused.
+  // Faster polling keeps mobile confirmation feedback snappy on local/test chains.
   provider.pollingInterval = 1500;
   return provider;
 }
@@ -136,13 +134,10 @@ type EventListenerHandle<T> = {
   cleanup: () => Promise<void>;
 };
 
-// When `contract.on(filter, listener)` is attached using a *deferred* topic
-// filter (e.g. `contract.filters.BatchHarvested(null, account)`), ethers v6
-// internally sets `fragment = null` and emits an empty decoded-args array.
-// The listener therefore only receives the `ContractEventPayload`, which
-// itself carries the decoded args + the underlying log. We expose that
-// directly so callers don't accidentally read `args[0]` and pick up the
-// payload object instead of the indexed bigint.
+// Deferred topic filters in ethers v6 (for example with `null` indexed args)
+// can deliver an empty listener arg list and only pass ContractEventPayload.
+// Read decoded args from payload.args so we don't treat the payload object as
+// the event's first indexed value.
 type ParsedEvent = {
   payload: ContractEventPayload;
   args: ReadonlyArray<unknown>;
@@ -160,10 +155,8 @@ function watchContractEvent<T>(
     const handler = (...rawArgs: unknown[]) => {
       const payload = rawArgs[rawArgs.length - 1] as ContractEventPayload | undefined;
       if (!payload?.log) return;
-      // Stale-event guard: only resolve for events that happened AFTER the
-      // caller captured its snapshot block. This protects against any prior
-      // BatchHarvested(_, account) / BatchTransferInitiated(...) / BatchReceived(...)
-      // log being replayed by the node's filter implementation.
+      // Ignore logs from the snapshot block or earlier so prior user activity
+      // cannot satisfy this click's Promise.race.
       if (typeof payload.log.blockNumber !== 'number' || payload.log.blockNumber <= options.minBlockNumber) {
         return;
       }
@@ -348,15 +341,10 @@ export async function harvestProducerBatch(
       hardwareId: hardwareId || null,
     });
 
-    // Snapshot the chain head BEFORE we attach the listener. Any
-    // BatchHarvested(_, account) event that surfaces from a block at or
-    // before this snapshot is from a previous harvest and must not be
-    // mistaken for "this click's" success.
+    // Capture head first so old harvest logs cannot resolve this attempt.
     const snapshotBlock = await publicProvider.getBlockNumber();
 
-    // Public-RPC event watcher: independent of WalletConnect, so it surfaces
-    // success even when the wallet's WS channel was paused while the user
-    // was approving the tx in MetaMask Mobile.
+    // Watch via public RPC in case WalletConnect transport is paused in background.
     const filter = publicContract.filters.BatchHarvested(null, context.account);
     const eventHandle = watchContractEvent<HarvestProducerBatchResult>(
       publicContract,
@@ -369,11 +357,9 @@ export async function harvestProducerBatch(
       { minBlockNumber: snapshotBlock }
     );
 
-    // Wallet promise: dispatch via the connector, then poll the receipt over
-    // the public RPC (NOT through `tx.wait()`, which routes back through WC).
+    // Send through wallet transport, confirm through public RPC polling.
     const walletPromise = (async (): Promise<HarvestProducerBatchResult> => {
-      // The deployed contract still requires a trackingCode argument; we pass an empty string,
-      // which short-circuits in `_registerTrackingCode` so no tracking-code mapping is created.
+      // Contract still expects trackingCode. Empty string intentionally skips mapping.
       const tx = hardwareId
         ? await context.contract.harvestBatchWithHardware(origin, ipfsHash, BigInt(weight), '', hardwareId)
         : await context.contract.harvestBatch(origin, ipfsHash, BigInt(weight), '');
@@ -421,12 +407,10 @@ async function initiateBatchTransferByIdWithContext(
     to: recipient,
   });
 
-  // Snapshot the chain head BEFORE we attach the listener so we ignore any
-  // BatchTransferInitiated(batchId, account, _) log replayed from before
-  // this click.
+  // Capture head first so old transfer logs cannot resolve this attempt.
   const snapshotBlock = await publicProvider.getBlockNumber();
 
-  // Filter by (batchId, from = sender) so we only resolve on the exact transfer.
+  // Match only this sender + batch id.
   const filter = publicContract.filters.BatchTransferInitiated(BigInt(batchId), context.account);
   const eventHandle = watchContractEvent<InitiateBatchTransferResult>(
     publicContract,
@@ -484,11 +468,10 @@ async function receiveTransferredBatchByIdWithContext(
     batchId,
   });
 
-  // Snapshot the chain head BEFORE we attach the listener so we ignore any
-  // BatchReceived(batchId, account, _) log replayed from before this click.
+  // Capture head first so old receive logs cannot resolve this attempt.
   const snapshotBlock = await publicProvider.getBlockNumber();
 
-  // Filter by (batchId, receiver = sender) so we only resolve on the exact receipt.
+  // Match only this receiver + batch id.
   const filter = publicContract.filters.BatchReceived(BigInt(batchId), context.account);
   const eventHandle = watchContractEvent<ReceiveTransferredBatchResult>(
     publicContract,

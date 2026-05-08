@@ -220,13 +220,8 @@ function openMetaMaskDeepLink(redirectNative: string | null) {
   if (typeof window === 'undefined') return;
   const target = redirectNative || 'metamask://';
   try {
-    // Use window.open(target, '_self', 'noreferrer noopener') instead of
-    // assigning to window.location.href. iOS Safari treats a custom-protocol
-    // navigation initiated via location.href as a "pending navigation" and
-    // can re-evaluate it (re-showing the "Open in MetaMask?" system sheet)
-    // when the tab regains focus after the user returns from MetaMask.
-    // window.open is treated as a discrete user-initiated action and matches
-    // the pattern used by WalletConnect's own handleDeeplinkRedirect.
+    // iOS can re-trigger protocol handoff prompts on tab return when we assign
+    // to location.href. window.open(..., '_self') behaves like a one-shot jump.
     window.open(target, '_self', 'noreferrer noopener');
   } catch {
     // best effort
@@ -483,7 +478,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         try {
           await disconnectAsync();
         } catch {
-          // keep connector handoff resilient
+          // Ignore disconnect failures; we still clear local signer state.
         }
         setActiveWalletSession(null);
       };
@@ -525,7 +520,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         await refreshFromTappedConnector();
       } catch (err) {
         if (isRecoverableConnectorError(err)) {
-          // Connector state can be stale after account switch; force a clean handoff.
+          // Account-switch races can leave a stale connector client; reconnect cleanly.
           await disconnectAndClearSession();
           try {
             await connectAsync(connectArgs);
@@ -584,7 +579,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
     try {
       await disconnectAsync();
     } catch {
-      // keep cleanup resilient
+      // Ignore disconnect errors; auth state is cleared below either way.
     }
     setActiveWalletSession(null);
     setError(null);
@@ -634,7 +629,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
         if (err instanceof Error && /Wallet session expired/.test(err.message)) {
           throw err;
         }
-        // best effort liveness probe; fall through to construct the signer
+        // Probe failure is non-fatal here; signer creation may still succeed.
       }
     }
 
@@ -853,7 +848,7 @@ export function WalletAuthProvider({ children }: { children: ReactNode }) {
           removers.push(() => provider.removeListener?.('disconnect', onDisconnect));
         }
       } catch {
-        // Listener attachment is best-effort.
+        // If listener wiring fails, polling/refresh paths still cover state sync.
       }
     };
 

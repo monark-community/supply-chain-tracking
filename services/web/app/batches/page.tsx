@@ -18,8 +18,9 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Search, Clock, Package, AlertTriangle } from 'lucide-react';
 import { readBatchById, subscribeChainproofEvents } from '@/lib/chainproof-read';
+import { shortenAddress } from '@/lib/wallet-auth';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
-import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
+import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 type ReadBatchByIdResult = Awaited<ReturnType<typeof readBatchById>>;
 
@@ -64,11 +65,6 @@ type TrackFeedback = {
   type: 'error';
   message: string;
 };
-
-function shortenAddress(value: string) {
-  if (!value || value.length < 10) return value;
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
 
 const TRACKED_BATCHES_KEY_PREFIX = 'chainproof:tracked-batches';
 
@@ -141,7 +137,6 @@ export default function BatchesPage() {
   const [trackingSubmitting, setTrackingSubmitting] = useState(false);
   const [trackFeedback, setTrackFeedback] = useState<TrackFeedback | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<BatchItem | null>(null);
-  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     setHasHydratedStorage(false);
@@ -170,14 +165,6 @@ export default function BatchesPage() {
     if (!storageKey || !hasHydratedStorage) return;
     window.localStorage.setItem(storageKey, JSON.stringify(batches));
   }, [batches, storageKey, hasHydratedStorage]);
-
-  useEffect(() => {
-    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
-    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
-    return () => {
-      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
-    };
-  }, []);
 
   const handleTrackBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

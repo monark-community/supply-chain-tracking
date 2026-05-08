@@ -37,6 +37,7 @@ Thumbs.db
 dist/
 build/
 coverage/
+*.tsbuildinfo
 
 # Generated smart contract outputs
 services/smart-contracts/artifacts/

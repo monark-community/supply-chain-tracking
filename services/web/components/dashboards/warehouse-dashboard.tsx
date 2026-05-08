@@ -8,14 +8,13 @@ import { ReadOnlyChainCard } from './read-only-chain-card';
 import { AlertTriangle, QrCode } from 'lucide-react';
 import { readWarehouseStorageQueue, type WarehouseStorageBatch } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
-import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
+import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 export function WarehouseDashboard() {
   const { account } = useWalletAuth();
   const [storageQueue, setStorageQueue] = useState<WarehouseStorageBatch[]>([]);
   const [loadingQueue, setLoadingQueue] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
-  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!account) {
@@ -46,14 +45,6 @@ export function WarehouseDashboard() {
       mounted = false;
     };
   }, [account]);
-
-  useEffect(() => {
-    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
-    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
-    return () => {
-      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
-    };
-  }, []);
 
   const formatTimestamp = (timestamp: number) => {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Unknown time';

@@ -8,14 +8,13 @@ import { Button } from '@/components/ui/button';
 import { ReadOnlyChainCard } from './read-only-chain-card';
 import { readProducerRecentActivity, type ProducerRecentActivity } from '@/lib/chainproof-read';
 import { useWalletAuth } from '@/components/auth/wallet-auth-context';
-import { BATCH_ENV_UPDATE_EVENT, getBatchEnvironmentAlert } from '@/lib/environment-alerts';
+import { getBatchEnvironmentAlert } from '@/lib/environment-alerts';
 
 export function ProducerDashboard() {
   const { account } = useWalletAuth();
   const [recentActivity, setRecentActivity] = useState<ProducerRecentActivity[]>([]);
   const [loadingActivity, setLoadingActivity] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
-  const [, setEnvRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!account) {
@@ -46,14 +45,6 @@ export function ProducerDashboard() {
       mounted = false;
     };
   }, [account]);
-
-  useEffect(() => {
-    const handleEnvUpdate = () => setEnvRefreshTick((value) => value + 1);
-    window.addEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
-    return () => {
-      window.removeEventListener(BATCH_ENV_UPDATE_EVENT, handleEnvUpdate);
-    };
-  }, []);
 
   const formatTimestamp = (timestamp: number) => {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Unknown time';

@@ -140,12 +140,6 @@ export async function readChainproofSummary(viewerAddress?: string) {
   };
 }
 
-export async function readPredictedNextBatchId(): Promise<number> {
-  const context = await createChainproofReadContext();
-  const batchCount = Number(await context.contract.batchCount());
-  return batchCount + 1;
-}
-
 export type ChainproofEventHandlers = {
   onBatchUpdate: (batchId: number) => void;
 };
@@ -307,18 +301,6 @@ export async function readBatchById(batchId: number) {
     children,
     timeline,
   };
-}
-
-export async function readBatchByHardwareId(hardwareId: string) {
-  const trimmed = hardwareId.trim();
-  if (!trimmed) {
-    throw new Error('Hardware id is required.');
-  }
-  const batchId = await readBatchIdByHardwareId(trimmed);
-  if (!batchId) {
-    throw new Error('No batch is bound to this hardware id.');
-  }
-  return readBatchById(batchId);
 }
 
 export async function readBatchIdByHardwareId(hardwareId: string): Promise<number> {
