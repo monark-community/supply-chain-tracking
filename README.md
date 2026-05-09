@@ -7,6 +7,17 @@ This README is the exact setup order for a new teammate to run the project local
 - Next.js web app
 - MetaMask / WalletConnect sign in
 
+## Demo Video
+
+[Watch the demo video](https://youtu.be/G9tcsj6ALTk?si=Ph8ValZLXu9ArB_d)
+
+Demo split into 4 parts:
+
+- 0:00 Some context about the Demo
+- 1:50 Initial setup of the repository
+- 5:47 How to run the application
+- 12:45 Demonstration of functionalities
+
 ## 0) Prerequisites
 
 Install these before starting:
